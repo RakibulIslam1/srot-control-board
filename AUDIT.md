@@ -32,16 +32,34 @@ resetting after a flash, that was attributed to `PARAM_DEFAULTS_VER` bumps disca
 this. The R10 "not saved" warning added earlier did not introduce the fault; it made a
 long-silent failure visible for the first time. Recorded here rather than quietly amended.
 
-**Fix.** New `partitions_hengla.csv`: NVS grows `0x5000` → `0xE000` (56 KB, 14 pages → 13 × 126 =
-**1638 usable entries, 2.41× headroom**). Verified by decoding the generated `partitions.bin` with
-ESP-IDF's own `gen_esp32part.py` rather than trusting the CSV. NVS stays at offset `0x9000`, so this
-is a growth; `app0` moves to `0x20000` because app partitions must be 64 KB-aligned.
+**Fix.** New `partitions_hengla.csv`: NVS becomes **128 KB (32 pages → 31 × 126 = 3906 usable
+entries, 5.7× headroom)**, placed **after** the app at `0x310000`. Verified by decoding the generated
+`partitions.bin` with ESP-IDF's own `gen_esp32part.py` rather than trusting the CSV.
 
-Two consequences, both handled explicitly:
+> ### ⚠ This fix bricked the board on its first attempt. Recorded, because the reason is a trap.
+>
+> The first version grew NVS in place (`0x5000` → `0xE000`) and moved `app0` from `0x10000` to
+> `0x20000` to make room. **The board then did nothing at all — no display, no serial — and
+> reflashing could not fix it.**
+>
+> Cause: **PlatformIO does not read the app offset from the partition CSV.**
+> `platform-espressif32/builder/main.py` does
+> `ESP32_APP_OFFSET = board.get("upload.offset_address", "0x10000")`, so it flashed `firmware.bin`
+> to a hardcoded `0x10000` while the bootloader — reading the new table — looked for the app at
+> `0x20000` and found erased flash. Every subsequent flash repeated the same mismatch, which is
+> exactly why reflashing appeared to do nothing.
+>
+> The board was never damaged: the bootloader at `0x1000` stayed intact, and flashing a table whose
+> app offset matches where PlatformIO actually writes recovers it immediately.
+>
+> **Rule for anyone editing that file: `app0` must start at `0x10000`.** Squeezing NVS in below the
+> app is capped at 28 KB anyway by the `0x9000` table boundary, so placing NVS *after* the app is
+> both safe and far roomier — partition order is free, since `nvs_flash_init()` finds the partition
+> by label, not position. The `0x9000`–`0x10000` region is left deliberately unallocated.
 
-- **The app moves**, so bootloader + partition table + app are all rewritten. A normal
-  `pio run -t upload` does this.
-- **Existing NVS is invalidated** — the space NVS grew into previously held `otadata` and the start
+One consequence, handled explicitly:
+
+- **Existing NVS is invalidated** — NVS has moved to a different address entirely, so the old
   of the app, so those pages are neither blank nor valid NVS. `params::init()` now runs
   `nvs_flash_init()` and, **on `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND`
   specifically**, `nvs_flash_erase()` + retry. Those two mean "the contents are unusable"; erasing

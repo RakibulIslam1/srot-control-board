@@ -32,7 +32,7 @@ Part of the **SROT** control-board suite:
 ```
 srot-control-board/
 ├── platformio.ini            three envs (see below)
-├── partitions_hengla.csv     custom partition table (56 KB NVS — see below)
+├── partitions_hengla.csv     custom partition table (128 KB NVS — see below)
 ├── src/                       ESP32 flight-controller firmware (Hengla)
 │   ├── main.cpp, comms/, control/, drivers/, tasks/
 │   ├── pico/main.cpp          RP2350 thruster + RPM co-processor
@@ -66,7 +66,7 @@ failsafe have no data and stay inert.
 > bumps `PARAM_DEFAULTS_VER` rewrites every parameter from its default. Bondor →
 > Parameters → Export (the file also carries the `CAL_*` sensor calibration).
 
-> **This build changes the partition table** (NVS 20 KB → 56 KB — the old one physically could not
+> **This build changes the partition table** (NVS 20 KB → 128 KB — the old one physically could not
 > hold the parameter set, which is why saves were failing). Flash it once with
 > `pio run -t erase` **then** `pio run -t upload`, and re-import your parameters afterwards.
 > Full procedure and rationale: [PARAMETERS.md](PARAMETERS.md) and [AUDIT.md](AUDIT.md) R14.

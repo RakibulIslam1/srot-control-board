@@ -169,7 +169,7 @@ predates everything in this session.** Details in [AUDIT.md](AUDIT.md) R14–R16
   float as a **blob** (~3 NVS entries, not 1), so 227 params + calibration keys needed **~681 entries
   against 504 available**. Writes failed once it filled: values read back as defaults, `SERVOn_ROLE`
   would not stick, and `ESPNOW_EN`/`MOT_BAT_V_MAX` not saving left the thruster-voltage link down.
-  Fixed with a custom `partitions_hengla.csv` — NVS 20 KB → **56 KB**, 1638 usable entries, **2.41×
+  Fixed with a custom `partitions_hengla.csv` — NVS 20 KB → **128 KB**, 3906 usable entries, **5.7×
   headroom** — verified by decoding the built `partitions.bin` with ESP-IDF's `gen_esp32part.py`.
   `params::init()` now recovers an unreadable NVS (`nvs_flash_init` → erase → retry) and announces a
   reformat as CRITICAL, since the sensor calibration shares the partition. `saveAll()`/`set()` also
