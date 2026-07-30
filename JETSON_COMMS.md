@@ -365,7 +365,7 @@ Everything the firmware dispatches. **Anything not listed returns `MAV_RESULT_UN
 | `DO_START_MAG_CAL` | 42424 | compass cal |
 | `PREFLIGHT_STORAGE` | 245 | **p1 = 1** save params · **p1 = 2** factory reset (params **and** learned motor directions) |
 | `DO_SET_SERVO` | 183 | p1 channel (1-based), p2 µs — PCA9685 |
-| `DO_SET_RELAY` | 181 | p1 relay instance (0-based), p2 1/0 |
+| `DO_SET_RELAY` | 181 | p1 relay instance (0-based), p2 1/0. **Reaches PCA channels 9–16 only** (instance → `PCA_RELAY_BASE_CH + n`). To drive a switch channel in the 1–8 range use `DO_SET_SERVO` — on a `SERVOn_ROLE = 2` channel its pulse width is a level, **≥ 1500 µs = ON**. |
 | `USER_1/2/3` | 31010-31012 | yaw / pitch / roll spin (stunt) |
 | `USER_4` | 31013 | pattern |
 | `USER_5` | 31014 | autotune start |

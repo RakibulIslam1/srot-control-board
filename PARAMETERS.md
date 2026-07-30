@@ -8,8 +8,8 @@
 > pretends otherwise. See [docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md) and
 > [docs/BLUEOS.md](docs/BLUEOS.md).
 
-Every parameter in the live table, documented: **113** scalar params + **26** calibration
-views + **80** servo params (16 channels × 5).
+Every parameter in the live table, documented: **121** scalar params + **26** calibration
+views + **80** servo params (16 channels × 5) = **227** total.
 
 SROT is now **SROT-native** — it no longer disguises itself as ArduSub, and the old
 QGC-compatibility dummy params have been **removed**. The ground station is **Bondor**
@@ -22,6 +22,30 @@ reboot. Wire type is REAL32 for all params.
 Legend: **[R]** real · **[i]** informational/inert (defined, not read by the control loop).
 
 ---
+
+## ⚠ Flashing this build: erase once, then restore
+
+This build **enlarges the NVS partition** (20 KB → 56 KB). The old one physically could not hold the
+parameter set — `Preferences` stores each float as a *blob* costing ~3 NVS entries, so 227 params and
+calibration keys needed ~681 entries against 504 available, and writes failed once it filled. That is
+what produced `"<NAME> set but NOT saved (NVS full?)"`, parameters reading back as defaults, and
+`SERVOn_ROLE` changes not sticking. See [AUDIT.md](AUDIT.md) R14.
+
+Growing the partition invalidates what is stored in it, so:
+
+1. **Export your parameters first** (Bondor → Parameters → Export). The live values are correct even
+   though the storage is broken, so a backup taken now is valid — and it carries the `CAL_*` sensor
+   calibration, which shares the partition and is otherwise lost for good.
+2. `pio run -t erase` — once, for the partition change.
+3. `pio run -t upload`.
+4. **Import** the backup, then power-cycle and confirm the values survived.
+
+If you skip the erase, the firmware detects the unreadable NVS, reformats it once, and reports
+`"NVS reformatted - params AND calibration lost, re-import"` as a CRITICAL message. You still need
+step 4.
+
+> `PM1_VMULT` **changed units** in this build — see the Battery section. An imported pre-change value
+> is detected and reported rather than silently applied.
 
 ## ⚠ Back your parameters up before you reflash
 
@@ -55,10 +79,18 @@ from. Import skips it (along with the momentary `ATUNE` / `MAG_ALIGN` triggers).
 
 **Servo vs MOSFET.** Each of the 16 PCA9685 aux channels is configured by
 **`SERVOn_ROLE`**: `0` = off, `1` = **PWM servo** (driven by `DO_SET_SERVO`, clamped by
-`SERVOn_MIN/MAX`, idles at `SERVOn_TRIM`), `2` = **MOSFET/relay** (driven by
-`DO_SET_RELAY` / joystick relay buttons). QGC's Servo Outputs *page* only shows outputs
-9-16 (it reserves 1-8 for the Sub frame's motors), but **all 16 are controllable** via
-the Parameters list + `DO_SET_SERVO`/`DO_SET_RELAY`.
+`SERVOn_MIN/MAX`, idles at `SERVOn_TRIM`), `2` = **MOSFET/relay** ON-OFF.
+
+**How to drive a role-2 (on/off) channel:**
+
+| Command | Reaches | Notes |
+|---|---|---|
+| **`DO_SET_SERVO`** (183) | **any channel, 1–16** | param1 = channel, param2 = pulse µs. On a role-2 channel the pulse is a **level**: **≥ 1500 µs = ON**, below = OFF. This is the general way to address a switch channel. |
+| `DO_SET_RELAY` (181) | **channels 9–16 only** | param1 is a relay *instance*, mapped to `PCA_RELAY_BASE_CH + instance` (= 9 + instance). Kept for the joystick relay buttons, which share this mapping. |
+
+> Until 2026-07-30 a role-2 channel in the **1–8** range was reachable by **neither** command:
+> `DO_SET_RELAY` could not address it, and `DO_SET_SERVO`'s pulse width was discarded for switch
+> channels. That is why on/off mode appeared to control nothing. See [AUDIT.md](AUDIT.md) R15.
 
 ---
 
@@ -174,7 +206,7 @@ success *and* refusal — is announced over `STATUSTEXT`.
 |---|---|---|
 | `PM1_SRC` **[R]** | 1 | Battery-1 source: 0 = off, 1 = local ADC (GPIO36), 2 = ESP-NOW aux. → BATTERY_STATUS id 0. |
 | `PM2_SRC` **[R]** | 2 | Battery-2 source (same codes). → BATTERY_STATUS id 1. |
-| `PM1_VMULT` **[R]** | 0.009088 | Volts per ADC LSB for PM1 (calibration). |
+| `PM1_VMULT` **[R]** | **11.28** | **Divider RATIO** — battery volts per volt at the pin. **Units changed** (was 0.009088 volts-per-ADC-count): the reading now comes from `analogReadMilliVolts()`, which applies the chip's factory ADC calibration and removes the 11 dB attenuation non-linearity that no single multiplier could compensate — the reason the reported pack voltage was wrong. A value **below 0.5** is detected as a stale pre-change setting, replaced by the default, and reported over `STATUSTEXT`. **Calibrate:** `PM1_VMULT_new = PM1_VMULT_now × (multimeter ÷ reported)`, ideally checked at two different pack voltages so a scale error is distinguishable from an offset. |
 | `PM2_VMULT` **[i]** | 0.009088 | **Not read** — PM2 is ESP-NOW aux, already scaled upstream. |
 | `LEAK_EN` **[R]** | 0 | Enable leak-sensor read + leak failsafe (real; not the compat `FS_LEAK_ENABLE`/`LEAK1_*`). |
 

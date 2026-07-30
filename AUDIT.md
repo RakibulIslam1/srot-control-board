@@ -1,6 +1,116 @@
 # Hengla — firmware audit
 
-Two rounds. **Round 2 is below and includes the most serious defect found in either** — the depth
+---
+
+# Round 3 (2026-07-30) — parameter persistence: the partition was too small all along
+
+Found from a field report ("parameter set but NOT saved (NVS full?)" over both USB and LoRa,
+parameters not loading, payload mode not changeable). **This is the root cause of several
+long-standing complaints, and it predates every change made in this session.**
+
+## R14 — the NVS partition physically cannot hold the parameter set
+
+`Preferences::putFloat()` calls `putBytes()` → `nvs_set_blob()`
+(`framework-arduinoespressif32/libraries/Preferences/src/Preferences.cpp:255`). Every float is
+stored as a **blob**, costing ~3 NVS entries (blob index + item header + data), not 1.
+
+```
+nvs partition (huge_app.csv) : 0x5000 = 20 KB = 5 pages
+usable entries               : (5 − 1 reserved for GC) × 126 = 504
+needed                       : (121 scalar + 80 servo + 26 cal) × 3 = 681
+```
+
+**681 > 504.** Once the partition filled, writes failed. Downstream symptoms, all one cause:
+values that never persisted read back as defaults ("not all parameters load"); a `SERVOn_ROLE`
+change would not stick ("cannot change payload mode"); and `ESPNOW_EN` / `MOT_BAT_V_MAX` failing to
+save left the thruster-voltage link down, so the OLED's PM2 box showed `--` and the voltage looked
+absent or frozen.
+
+**Correction to an earlier diagnosis in this same document.** When the operator reported parameters
+resetting after a flash, that was attributed to `PARAM_DEFAULTS_VER` bumps discarding tuning. Bumps
+*do* discard tuning and that part stands — but it was not the whole story, and the deeper cause was
+this. The R10 "not saved" warning added earlier did not introduce the fault; it made a
+long-silent failure visible for the first time. Recorded here rather than quietly amended.
+
+**Fix.** New `partitions_hengla.csv`: NVS grows `0x5000` → `0xE000` (56 KB, 14 pages → 13 × 126 =
+**1638 usable entries, 2.41× headroom**). Verified by decoding the generated `partitions.bin` with
+ESP-IDF's own `gen_esp32part.py` rather than trusting the CSV. NVS stays at offset `0x9000`, so this
+is a growth; `app0` moves to `0x20000` because app partitions must be 64 KB-aligned.
+
+Two consequences, both handled explicitly:
+
+- **The app moves**, so bootloader + partition table + app are all rewritten. A normal
+  `pio run -t upload` does this.
+- **Existing NVS is invalidated** — the space NVS grew into previously held `otadata` and the start
+  of the app, so those pages are neither blank nor valid NVS. `params::init()` now runs
+  `nvs_flash_init()` and, **on `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND`
+  specifically**, `nvs_flash_erase()` + retry. Those two mean "the contents are unusable"; erasing
+  on *any* error would risk wiping a good calibration in response to something an erase cannot fix
+  (a missing partition, an allocation failure). Without this guard every
+  `Preferences::begin()` would fail forever and no parameter could ever be saved again — the exact
+  failure the partition change exists to fix. A reformat is announced as a **CRITICAL** `STATUSTEXT`
+  because it also wipes the sensor calibration, which shares the partition.
+
+**Also reduced the write churn that filled it.** `saveAll()` rewrote all 201 non-cal parameters on
+every save — and autotune, motor_tune and every GCS "Save to flash" call it — churning ~603 entries
+of garbage per save and driving continuous garbage collection. `saveAll()` and `set()` now skip
+values already stored. A save is now nearly free in the common case.
+
+> **Count correction.** The first write-up of this finding said 113 scalar params / 657 entries.
+> Review caught it: `SCALARS[]` actually has 147 rows, 26 of them `CAL_*` views that own no NVS key,
+> leaving **121** non-cal scalars. Real totals are **227 keys / 681 entries**, and headroom after the
+> fix is **2.41×**, not 2.49×. The conclusion is unchanged — 681 > 504 just as 657 did — and the fix
+> is still comfortably sufficient, but the arithmetic is the whole point of this entry, so the
+> corrected numbers are what stand.
+
+**A related gap closed at the same time.** The skip-if-already-stored compare reads an absent key
+back as its `NAN` default, so a genuinely-NaN value written to a never-before-written key would
+*match*, take the skip path, and report `persisted = true` for a key that was never stored — then
+silently revert to its compiled default on the next boot. `PARAM_SET` is a separate entry point from
+`dispatchCommand()`, so R5's blanket non-finite rejection did not cover it. `onParamSet()` now
+rejects non-finite values the same way.
+
+## R15 — on/off payload channels were unreachable over MAVLink
+
+`DO_SET_RELAY`'s param1 is a relay *instance*, mapped to `PCA_RELAY_BASE_CH + instance` = **channels
+9–16 only**. `DO_SET_SERVO` writes `servo_us[ch]`, which `Task_UI_Status` deliberately zeroes for a
+role-2 channel. A channel in the **1–8** range set to on/off was therefore addressable by **neither**
+command — which is why neither the servo nor the relay responded over USB in that mode. One bug, two
+symptoms.
+
+**Fix.** `DO_SET_SERVO` now branches on `SERVOn_ROLE`: on a role-2 channel the pulse width is a level
+(≥ 1500 µs = ON); otherwise it writes `servo_us` as before. Every channel is now addressable by its
+own channel number whatever its role. `DO_SET_RELAY` is unchanged, so the joystick relay buttons that
+share its mapping still behave identically.
+
+## R16 — PM1 read a non-linear ADC through a linear multiplier
+
+`analog_mon.cpp` did `analogRead(pin) × volt_mult` at 11 dB attenuation. The ESP32 ADC is markedly
+non-linear there (worst above ~2.5 V and below ~0.15 V); no single multiplier fits it, and after a
+battery divider the error is easily several hundred millivolts.
+
+**Fix.** Use `analogReadMilliVolts()`, which applies this chip's factory eFuse calibration curve.
+`PM1_VMULT` consequently changes meaning from volts-per-ADC-count (~0.009) to the **divider ratio**
+(~11). Because a `.params` backup written before this change carries the old value — and applying
+~0.009 as a ratio would report a flat battery on a full pack — a value below 0.5 is detected as
+stale, replaced by the default, and reported over `STATUSTEXT`. Current is left on raw counts: its
+multiplier is uncalibrated either way and `CURR` is display-only.
+
+## Corrected while investigating — the OLED was not the problem
+
+The plan for this round claimed the OLED never displayed the thruster voltage, based on `oled.h`
+declaring an `aux_v` field that `oled.cpp` referenced zero times. **That diagnosis was wrong.** The
+voltage reaches the display as `pm2` (since `PM2_SRC` defaults to 2) and the top-left box already
+prints it, showing `--` when the link is stale. Nothing was missing; the reading was absent because
+the link was down, because `ESPNOW_EN` had not persisted — R14 again.
+
+The dead `aux_v` field was removed rather than wired up: it was plumbed from `Task_UI_Status` and
+never drawn, and its presence is precisely what made the display path look absent. No new readout
+was added, because none was needed.
+
+---
+
+Two earlier rounds. **Round 2 is below and includes the most serious defect found in either** — the depth
 PID's sign was inverted, which made the leak / low-battery / GCS-loss failsafe drive the vehicle
 *down* instead of surfacing it. Round 1 (further down) covered the comms and control paths I read
 by hand.

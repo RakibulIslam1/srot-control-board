@@ -144,6 +144,12 @@ void init();
 // to the compiled defaults. Reported to the GCS once, so the reset is never silent.
 bool defaultsWereReset();
 
+// True if init() found NVS unreadable and reformatted it — every parameter and the sensor
+// calibration are then at their defaults. Expected exactly once, on the first boot after the
+// NVS partition was enlarged; at any other time it means the flash storage failed. Reported
+// to the GCS so it is never silent.
+bool nvsWasReformatted();
+
 // Restore every parameter to its config.h default and persist. Exposed via
 // MAV_CMD_PREFLIGHT_STORAGE param1 = 2 (ArduPilot's "reset to defaults" convention).
 void resetAllToDefaults();

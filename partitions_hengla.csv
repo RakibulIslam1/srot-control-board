@@ -1,0 +1,39 @@
+# Hengla partition table — ESP32 flight controller, 4 MB flash.
+#
+# WHY THIS EXISTS: the stock huge_app.csv gives NVS 0x5000 (20 KB = 5 pages), and that is
+# physically too small for this firmware's parameter set.
+#
+#   Arduino's Preferences::putFloat() calls putBytes() -> nvs_set_blob(), so every float is
+#   stored as a BLOB, costing ~3 NVS entries (blob index + item header + data), not 1.
+#     needed : (121 scalar + 80 servo + 26 calibration) x 3   = 681 entries
+#     had    : (5 pages - 1 reserved for GC) x 126 entries    = 504 entries
+#   (121 = the 147 rows of SCALARS[] minus the 26 CAL_* views, which own no NVS key of
+#    their own; the servo rows are 16 channels x 5 fields, appended separately.)
+#   681 > 504, so writes failed once the partition filled — silently, until the firmware
+#   started checking putFloat()'s return. Symptoms were params not persisting, a
+#   SERVOn_ROLE change not sticking, and values reading back as defaults after a reboot.
+#
+# NVS is now 0xE000 (56 KB = 14 pages) -> (14 - 1) x 126 = 1638 usable entries, i.e. ~2.4x
+# what the current table needs, with room for it to grow.
+#
+# spiffs shrinks 896 KB -> 768 KB to fund this. Nothing in the firmware uses SPIFFS (logging
+# goes to the SD card), so the space was idle.
+#
+# NVS deliberately stays at offset 0x9000 so this is a GROWTH, not a move. But the space it
+# grew into previously held otadata and the start of the app, so those pages are not blank
+# and NVS cannot read them: params::init() runs nvs_flash_init() and reformats on any error.
+# A one-time `pio run -t erase` before the first upload avoids the question entirely.
+#
+# app0 must start on a 64 KB boundary (an ESP32 requirement for app partitions), which is
+# why it moves 0x10000 -> 0x20000 and leaves a small gap after otadata. Current app usage is
+# ~917 KB against the 3 MB reserved here, so there is ample headroom.
+#
+# CHANGING THIS FILE MOVES THE APP: bootloader, partition table and firmware must all be
+# rewritten. A normal `pio run -t upload` does write all three.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0xE000,
+otadata,    data, ota,      0x17000,  0x2000,
+app0,       app,  factory,  0x20000,  0x300000,
+spiffs,     data, spiffs,   0x320000, 0xC0000,
+coredump,   data, coredump, 0x3E0000, 0x10000,

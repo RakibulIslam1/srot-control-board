@@ -9,7 +9,8 @@
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_stream.h"
 #include "comms/mav_commands.h"
-#include "comms/params.h"       // defaultsWereReset() boot notice
+#include "comms/params.h"       // defaultsWereReset() / nvsWasReformatted() boot notices
+#include "drivers/analog_mon.h" // voltMultLooksStale() — PM1_VMULT units-change warning
 
 // Reset reason captured in main.cpp setup().
 extern const char* g_reset_reason;
@@ -34,6 +35,21 @@ void Task_MAVLink(void* pv) {
     if (params::defaultsWereReset()) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
                                    "Params reset to build defaults");
+    }
+    // Louder than a defaults reset: this also wipes the sensor CALIBRATION, which lives in
+    // the same NVS. Expected exactly once, after the partition was enlarged. Any other time
+    // it means the flash storage itself failed.
+    if (params::nvsWasReformatted()) {
+        mav_stream::sendStatusText(MAV_SEVERITY_CRITICAL,
+                                   "NVS reformatted - params AND calibration lost, re-import");
+    }
+    // PM1_VMULT changed units (volts-per-count -> divider ratio) when the battery reading
+    // moved to the calibrated ADC path. A backup written before that change carries the old
+    // value; applying it as a ratio would report ~0 V on a healthy pack. read() substitutes
+    // the default, and this says so rather than leaving a plausible-looking wrong number.
+    if (analog_mon::voltMultLooksStale(g_params.pm1_vmult)) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "PM1_VMULT is stale (now a divider ratio) - recalibrate");
     }
 
     for (;;) {

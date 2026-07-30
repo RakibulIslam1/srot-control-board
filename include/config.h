@@ -348,7 +348,19 @@
 #define DEF_RGB_BRIGHTNESS      64          // 0..255 WS2812B brightness
 
 // Battery ADC calibration (V per raw LSB) — from 2nd_board_firmware reference
-#define DEF_PM1_VMULT           0.009088f
+// PM1_VMULT is the resistor-divider RATIO: battery volts per volt measured at the pin.
+// (It used to be volts-per-ADC-count, ~0.009. The reading now comes from
+// analogReadMilliVolts(), which applies this chip's factory ADC calibration and removes the
+// 11 dB attenuation non-linearity that no single linear multiplier could compensate — the
+// reason the reported pack voltage was wrong. A value below ~0.5 is detected as a stale
+// pre-change setting, replaced by this default, and reported over STATUSTEXT.)
+//
+// 11.28 reproduces the old full-scale (0.009088 V/count x 4095 counts = 37.2 V) against a
+// 3.3 V input, so it is the closest equivalent starting point — but it is a STARTING POINT.
+// Calibrate: PM1_VMULT_new = PM1_VMULT_now x (multimeter reading / reported reading).
+#define DEF_PM1_VMULT           11.28f
+// PM2 arrives pre-scaled from the 2nd board over ESP-NOW; this is documented as inert and is
+// deliberately left in the old units so nothing silently reinterprets it.
 #define DEF_PM2_VMULT           0.009088f
 
 // Cascaded angle→rate PID starting gains (per axis; tuned later — see ARCHITECTURE.md §4)
