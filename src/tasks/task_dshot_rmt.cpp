@@ -79,9 +79,16 @@ void Task_DShot_RMT(void* pv) {
         if (beep_frames > 0 && !armed) { beep = true; beep_frames--; }
         else if (armed) beep_frames = 0;
 
-        // Closed-loop RPM (Stage 2) unless disabled or a motor test is running (test =
-        // raw DShot for predictable bench behaviour).
-        bool rpm_mode = (THR_RPM_CLOSED_LOOP != 0) && !testing && !g_mtune_active;
+        // Closed-loop RPM unless disabled or a motor test is running (test = raw DShot for
+        // predictable bench behaviour).
+        //
+        // Gated on the RUNTIME param, not the compile-time THR_RPM_CLOSED_LOOP. The cfg
+        // frame below already pushes g_params.rpm_loop to the Pico as its loop enable, so
+        // using a different switch here meant RPM_LOOP=1 told the Pico to close the loop
+        // while this side kept sending raw DShot frames tagged raw — one feature with two
+        // disagreeing switches, and the runtime one silently did nothing. Open vs closed
+        // loop is the operator's call, so it lives in the param.
+        bool rpm_mode = (g_params.rpm_loop >= 0.5f) && !testing && !g_mtune_active;
         int16_t tgt[NUM_THRUSTERS] = {0};   // target rpm (rpm_mode) — kept for the stall message
         if (rpm_mode) {   // always send (cached command on a lock miss) — never starve the link
             // Scale by the RPM_MAX *param*, not the THR_MAX_RPM #define: the Pico

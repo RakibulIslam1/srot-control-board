@@ -284,7 +284,7 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
         }
 
         case MAV_CMD_DO_MOTOR_TEST: {
-            // ArduSub semantics: p1=motor (QGC 1-based), p2=throttle type
+            // Standard MAV_CMD_DO_MOTOR_TEST: p1=motor (1-based), p2=throttle type
             //   (0=percent 0..100, 1=raw PWM µs, 2=pilot→reject), p3=throttle.
             //   p4/p5 ignored; timeout is a ≥2 Hz keep-alive (auto-disarm on gap).
             //   Motors must be ARMED.

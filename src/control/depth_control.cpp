@@ -20,6 +20,7 @@ void reset(float current_depth) {
 void setTarget(float depth_m) { s_target = depth_m; }
 float target() { return s_target; }
 float integral() { return s_pid.integral(); }
+void  bleedIntegral(float amount) { s_pid.bleedIntegral(amount); }
 
 float update(float stick_throttle, float meas_depth, float dt, float& target_out) {
     s_pid.setGains(g_params.depth_p, g_params.depth_i, g_params.depth_d);

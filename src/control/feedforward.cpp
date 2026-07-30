@@ -18,8 +18,14 @@ void apply(float& roll, float& pitch, float& yaw, float& throttle,
            float gx, float gy, float gz, FlightMode mode, bool learn) {
     if (mode == FlightMode::MANUAL) return;   // raw passthrough — no model terms
 
+    // AUTO is included in `stabilized`: it runs the SAME attitude::stabilize() cascade, so
+    // the drag and cross-coupling terms apply to it identically. Leaving it out meant the
+    // model-based feedforward silently did nothing in the one mode the companion computer
+    // uses. It is deliberately NOT in `angle_hold` — AUTO commands its own translation, so
+    // "sticks centred" is not evidence of a steady trim state and it must not learn.
     const bool stabilized = (mode == FlightMode::STABILIZE || mode == FlightMode::ACRO ||
-                             mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE);
+                             mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE ||
+                             mode == FlightMode::AUTO);
     const bool angle_hold = (mode == FlightMode::STABILIZE ||
                              mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE);
     const bool depth_mode = (mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE);
@@ -37,18 +43,32 @@ void apply(float& roll, float& pitch, float& yaw, float& throttle,
         pitch += g_params.xc_yaw2pit * gz;
     }
 
-    // 3) Centre-of-Buoyancy auto-trim — slowly bleed the steady rate-PID integrator
+    // 3) Centre-of-Buoyancy auto-trim — slowly TRANSFER the steady rate-PID integrator
     //    (and depth integrator) into a persistent feedforward trim, so the integrator
     //    returns toward zero: full I-term headroom for real disturbances, no slow
     //    windup, faster recovery. (It does NOT save energy — the same thrust holds the
     //    sub level regardless; only physical ballast changes the energy cost.)
+    //
+    //    It must be a TRANSFER, not a copy. This used to add `leak * integral()` to the
+    //    trim while leaving the integrator untouched — but an integrator only decays when
+    //    the error reverses, so the same charge was re-transferred every cycle and the
+    //    trim ramped straight to its clamp (at leak 0.002 x 500 Hz that is under a second),
+    //    after which the PID had to fight its own trim. Bleeding the transferred amount out
+    //    of the integrator makes the total effort conserved, which is what the design
+    //    always claimed to do.
     if (angle_hold && g_params.trim_en > 0.5f && learn) {
         const float leak = g_params.trim_leak;
         const float mx   = g_params.trim_max;
-        s_trim_roll  = constrain(s_trim_roll  + leak * attitude::rateIntegral(0), -mx, mx);
-        s_trim_pitch = constrain(s_trim_pitch + leak * attitude::rateIntegral(1), -mx, mx);
+        auto shift = [&](float& trim, float integ) -> float {
+            const float want = leak * integ;
+            const float before = trim;
+            trim = constrain(trim + want, -mx, mx);
+            return trim - before;      // what the clamp actually accepted
+        };
+        attitude::bleedRateIntegral(0, shift(s_trim_roll,  attitude::rateIntegral(0)));
+        attitude::bleedRateIntegral(1, shift(s_trim_pitch, attitude::rateIntegral(1)));
         if (depth_mode)
-            s_trim_thr = constrain(s_trim_thr + leak * depth::integral(), -mx, mx);
+            depth::bleedIntegral(shift(s_trim_thr, depth::integral()));
     }
     roll     += s_trim_roll;
     pitch    += s_trim_pitch;

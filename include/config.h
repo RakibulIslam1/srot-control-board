@@ -1,57 +1,53 @@
 #pragma once
 
 // =============================================================================
-//  SROT FLIGHT CONTROLLER — HARDWARE & TUNING CONFIGURATION
-//  MAVLink-native ArduSub-clone firmware | ESP32 DevKit V1 | dual-core FreeRTOS
+//  HENGLA — HARDWARE & TUNING CONFIGURATION
+//  MAVLink-native AUV/ROV flight-control firmware for the SROT control board.
+//  ESP32 DevKit V1 + RP2350 thruster co-processor | dual-core FreeRTOS | 500 Hz.
 //
 //  This is the SINGLE source of truth for pin assignments, bus parameters,
 //  FreeRTOS task allocation, and default tuning constants.
 //  Nothing in the firmware should hardcode a pin or bus — it lives here.
-//
-//  Single source of truth for the whole (fully-implemented) firmware.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// SECTION 0 — SROT IDENTITY
-// The board IS "SROT", but QGC loads its built-in ArduSub setup UI from our
-// heartbeat and gates features (Motor Test tab, param metadata/descriptions) on an
-// ArduSub firmware version. So to QGC we advertise ArduSub 4.1.0 (see the
-// APM_COMPAT_* macros below), while SROT identity is kept in:
-//   1. The OLED and BlueOS
-//   2. AUTOPILOT_VERSION.flight_custom_version[8] = "SROT"
-//   3. A boot STATUSTEXT "SROT vx.y.z (ArduSub-compat)" (alongside the version banner)
+// SECTION 0 — IDENTITY
+//
+//  The BOARD is "SROT". The FIRMWARE is "Hengla". Both names are load-bearing and
+//  they are not interchangeable: SROT names the hardware (and the NVS namespaces,
+//  the repos, and MAV_CMD_SROT_MOVE, all of which stay as they are), while Hengla
+//  names this software.
+//
+//  Hengla is NOT ArduSub and does not pretend to be. The heartbeat reports
+//  MAV_AUTOPILOT_GENERIC on a MAV_TYPE_SUBMARINE frame, so a GCS sees an honest
+//  generic autopilot. The consequence is deliberate and accepted: QGroundControl's
+//  and BlueOS's ArduPilot-gated setup pages stay empty, because they key off an
+//  ArduPilot autopilot id. Bondor is the ground station. See docs/BLUEOS.md.
+//
+//  (Historical note: an APM_COMPAT_* block used to spoof "ArduSub V4.1.0" here to
+//  unlock those QGC pages. It was already dead code — nothing referenced it — and
+//  has been removed rather than left to mislead.)
+//
+//  Parameter IDs still follow the ArduPilot naming convention (ATC_*, MOT_*, FS_*).
+//  That is descriptive, widely understood, and keeps existing .params backups
+//  valid; it is not a claim of lineage. See PARAMETERS.md.
 // -----------------------------------------------------------------------------
-#define SROT_FW_NAME            "SROT"
-#define SROT_FW_VERSION_MAJOR   0
-#define SROT_FW_VERSION_MINOR   1
-#define SROT_FW_VERSION_PATCH   0
-#define SROT_FW_VERSION_STR     "SROT v0.1.0"
-#define SROT_BUILD_DATE         __DATE__ " " __TIME__
+#define HENGLA_FW_NAME            "Hengla"
+#define HENGLA_FW_VERSION_MAJOR   0
+#define HENGLA_FW_VERSION_MINOR   2
+#define HENGLA_FW_VERSION_PATCH   0
+#define HENGLA_FW_VERSION_STR     "Hengla v0.2.0"
+#define HENGLA_BUILD_DATE         __DATE__ " " __TIME__
 
-// AUTOPILOT_VERSION identity fields (Phase 2 populates the message)
-#define SROT_MAV_VENDOR_ID      0x5352      // 'SR'
-#define SROT_MAV_PRODUCT_ID     0x4F54      // 'OT'
-#define SROT_MAV_CUSTOM_VER     "SROT"      // ASCII, copied into flight_custom_version[8]
+// AUTOPILOT_VERSION identity fields.
+#define HENGLA_MAV_VENDOR_ID      0x5352      // 'SR' — the SROT board
+#define HENGLA_MAV_PRODUCT_ID     0x4847      // 'HG' — Hengla firmware
+#define HENGLA_MAV_CUSTOM_VER     "HENGLA"    // ASCII → flight_custom_version[8] (max 8)
 
 // packed 32-bit software version for AUTOPILOT_VERSION.flight_sw_version
-#define SROT_FW_VERSION_PACKED  ( (uint32_t)SROT_FW_VERSION_MAJOR << 24 | \
-                                  (uint32_t)SROT_FW_VERSION_MINOR << 16 | \
-                                  (uint32_t)SROT_FW_VERSION_PATCH <<  8 )
-
-// --- ArduSub-compatibility version -------------------------------------------
-// QGC loads its built-in ArduSub plugin from our heartbeat (ARDUPILOTMEGA +
-// SUBMARINE) and gates features on the reported firmware version: the Motor Test
-// tab needs >= 3.5.3, and the version selects which bundled param-metadata file it
-// uses for descriptions. So we advertise ArduSub 4.1.0 to QGC (via flight_sw_version
-// + the boot banner). SROT identity is kept in the OLED, BlueOS, and the
-// AUTOPILOT_VERSION custom-version field ("SROT").
-#define APM_COMPAT_VER_MAJOR    4
-#define APM_COMPAT_VER_MINOR    1
-#define APM_COMPAT_VER_PATCH    0
-#define APM_COMPAT_VER_PACKED   ( (uint32_t)APM_COMPAT_VER_MAJOR << 24 | \
-                                  (uint32_t)APM_COMPAT_VER_MINOR << 16 | \
-                                  (uint32_t)APM_COMPAT_VER_PATCH <<  8 )
-#define APM_COMPAT_BANNER       "ArduSub V4.1.0"
+#define HENGLA_FW_VERSION_PACKED  ( (uint32_t)HENGLA_FW_VERSION_MAJOR << 24 | \
+                                    (uint32_t)HENGLA_FW_VERSION_MINOR << 16 | \
+                                    (uint32_t)HENGLA_FW_VERSION_PATCH <<  8 )
 
 // -----------------------------------------------------------------------------
 // SECTION 1 — MAVLINK LINK IDENTITY
@@ -200,17 +196,21 @@
 // doesn't flap the status/log. Safety is unaffected: the Pico self-stops its thrusters on its
 // own 150 ms link timeout — this only governs the ESP32's status/failsafe view.
 
-// Thruster command mode: 0 = raw DShot (stabilisation drives throttle directly),
-// 1 = send signed target RPM and let the Pico close a per-motor RPM loop.
+// Thruster command mode. THIS IS ONLY THE BOOT DEFAULT for the RPM_LOOP parameter — the
+// live switch is `RPM_LOOP`, editable from the GCS, and both the ESP32's command mode and
+// the Pico's loop enable now read that one param. (They used to disagree: this #define
+// gated the ESP32 while RPM_LOOP gated the Pico, so setting RPM_LOOP=1 silently did
+// nothing on this side.)
+//   0 = raw DShot (stabilisation drives throttle directly)
+//   1 = send signed target RPM and let the Pico close a per-motor RPM loop
 //
-// **0 is correct and is the default.** Putting an RPM setpoint loop inside the attitude
-// path made the vehicle oscillate: a 1 degree disturbance produced spin-up / stop /
-// spin-up cycling. That is not a tuning problem, it is the architecture — thruster
-// dynamics are a slow nonlinear lag (Yoerger/Cooke/Slotine 1990) and shaft-speed control
-// is known to induce thrust oscillation in dynamic conditions (Smogeli/Sorensen 2009).
-// No mainstream flight or ROV firmware closes a thrust loop on RPM: ArduPilot, ArduSub,
-// Betaflight and INAV all use bidirectional-DShot RPM for the notch filter, telemetry and
-// health only.
+// **0 is the recommended default.** Putting an RPM setpoint loop inside the attitude path
+// made the vehicle oscillate: a 1 degree disturbance produced spin-up / stop / spin-up
+// cycling. That is not a tuning problem, it is the architecture — thruster dynamics are a
+// slow nonlinear lag (Yoerger/Cooke/Slotine 1990) and shaft-speed control is known to
+// induce thrust oscillation in dynamic conditions (Smogeli/Sorensen 2009). No mainstream
+// flight or ROV firmware closes a thrust loop on RPM; they all use bidirectional-DShot RPM
+// for the notch filter, telemetry and health only.
 //
 // Voltage-independent thrust — the actual reason RPM was wanted — is delivered OUTSIDE the
 // fast path instead: a slow per-thruster RPM trim (control/thrust_trim) plus battery
@@ -320,6 +320,15 @@
 #define CONTROL_LOOP_HZ         500
 #define CONTROL_LOOP_DT         (1.0f / (float)CONTROL_LOOP_HZ)
 
+// Derivative low-pass cutoff (Hz) for every PID (control/pid.h). A raw difference at
+// 500 Hz multiplies gyro noise by 500, which is why D could not be raised during tuning:
+// the term was mostly noise and buzzed the motors long before it damped anything. 20 Hz is
+// well above sub-scale rigid-body dynamics (a few Hz) and well below the noise floor.
+// Lower it if D still sounds harsh; 0 disables the filter (old raw behaviour).
+// Compile-time on purpose — the parameter table is deliberately left untouched, so
+// changing this needs a rebuild.
+#define PID_D_FILT_HZ           20.0f
+
 #define TASK_DSHOT_CORE         CORE_FLIGHT
 #define TASK_DSHOT_PRIO         5
 #define TASK_DSHOT_STACK        4096
@@ -426,7 +435,9 @@
 #define DEF_ST_ANGLE_MAX        70.0f       // deg — tumbling guard
 #define DEF_ST_RATE_MAX         360.0f      // deg/s — spin-out guard
 #define DEF_ST_DEPTH_DELTA      2.0f        // m — depth-runaway guard
-#define DEF_ST_RPM_MAX          4500.0f     // rpm — over-speed guard (>= THR_MAX_RPM)
+#define DEF_ST_RPM_MAX          4500.0f     // rpm — over-speed guard. Must sit ABOVE the
+                                            // reachable maximum (RPM_MAX default 3600 for a
+                                            // T200) or a tune trips its own guard.
 
 // Motor closed-loop RPM control (defaults; MOTOR_TUNE overwrites, cfg frame pushes to Pico)
 #define DEF_RPM_KP              0.60f
@@ -444,10 +455,13 @@
 // 4.2 % of stick travel. 30 rpm keeps a genuine "stopped at centre" without eating the
 // usable low end. Pushed to the Pico in the cfg frame.
 #define DEF_RPM_MIN_TGT         30.0f       // rpm
-// LEGACY. Only has any effect when THR_RPM_CLOSED_LOOP == 1, which is no longer the
-// default (see above). Left as an escape hatch; the PI's sign bugs are fixed, but the
-// architecture is wrong for stabilisation — prefer THR_TRIM_EN for repeatable thrust.
-#define DEF_RPM_LOOP            0.0f        // 0 = open-loop (feedforward) · 1 = closed-loop RPM (PI)
+// The LIVE open-vs-closed-loop switch, and the operator's call to make. Both the ESP32's
+// command mode (task_dshot_rmt) and the Pico's loop enable (pushed in the cfg frame) read
+// this one param, so setting it to 1 genuinely switches the whole path. Its boot default is
+// THR_RPM_CLOSED_LOOP above.
+// The PI's sign bugs are fixed, but the architecture is still wrong for stabilisation —
+// prefer THR_TRIM_EN for repeatable thrust. See the note at THR_RPM_CLOSED_LOOP.
+#define DEF_RPM_LOOP            ((float)THR_RPM_CLOSED_LOOP)   // 0 = open-loop · 1 = closed-loop RPM (PI)
 #define DEF_DSHOT_BIDIR         1.0f        // 1 = bidirectional DShot (RPM telem) · 0 = normal DShot
 #define DEF_MTUNE_EN            0.0f        // MOTOR_TUNE disabled until explicitly enabled
 

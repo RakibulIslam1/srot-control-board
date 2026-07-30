@@ -159,6 +159,90 @@ default 0/off → unchanged until tuned; math in `ALGORITHMS.md §5`):
 > `tuning_guide.md` → `ARCHITECTURE.md`; `WIRING.md` → `HARDWARE.md`; `plan.md`/
 > `ideas_and_progress.md` → this file; `pico_thruster/` → `src/pico/`.
 
+### 2026-07-30 — Firmware named Hengla; full audit (9 defects fixed); 2nd-board env
+
+**Naming.** The board is **SROT**; the firmware is now **HENGLA**. Minimal by intent: `config.h`
+§0 identity, the boot banner, the OLED version line and `AUTOPILOT_VERSION` (vendor `'SR'` =
+board, product `'HG'` = firmware, `flight_custom_version = "HENGLA"`). Deliberately **unchanged**:
+every parameter name, `MAV_CMD_SROT_MOVE` and its 31000 wire id, the NVS namespaces
+(`srot_prm`/`srot_cal` — renaming those silently wipes params + calibration), the LoRa frame
+magic, Bondor's `protocol.ts`/`srotParams.ts`, and the repo names.
+
+**De-ArduSub.** Deleted the `APM_COMPAT_*` macros — they were **dead code nothing referenced**,
+yet `config.h` §0 still claimed "to QGC we advertise ArduSub 4.1.0". The heartbeat has reported
+`MAV_AUTOPILOT_GENERIC` for a while, so the disguise was already gone in behaviour and only alive
+in the comments. Dropped the "ArduSub-clone" headers and rewrote the lineage comments to describe
+behaviour. Parameter IDs keep the ArduPilot convention on purpose (descriptive, and it keeps
+`.params` backups valid) — stated honestly in `PARAMETERS.md` rather than implied.
+
+**Audit — see [AUDIT.md](AUDIT.md) for evidence per finding.** Nine real defects, all fixed:
+- **B1 (high):** a `SROT_MOVE` that completed during a parameter download **never sent its
+  terminal ACK** — `updateMove()` sat below the download throttle and only latched while
+  `mv_active`. The handler had already replied `IN_PROGRESS`, so a ROS action hung for ever. Also
+  surfaced a second hang: the handler forces AUTO but the loop *refuses* AUTO with no depth
+  sensor, so the move never started and nothing resolved it — now an explicit `FAILED`.
+- **B2 (high):** `RPM_LOOP` was **half-wired** — the ESP32 gated on compile-time
+  `THR_RPM_CLOSED_LOOP` while the Pico got the runtime param, so setting it to 1 did nothing on
+  this side. Both now read the param; the `#define` is just its boot default.
+- **B3 (high):** **AUTO + `STYLE` disarmed itself every time** — a commanded 360° roll trips the
+  70° tumbling guard immediately. The angle guard is now suppressed for a commanded spin; rate,
+  depth and RPM guards still apply.
+- **B4-B6 (PID, `pid.h` rewritten, 18 host assertions):** no anti-windup — the integrator kept
+  filling while the output was saturated, leaving a **permanent 4.5%-of-full-torque bias per
+  axis** that an integrator can never decay (measured; now 0.000%). No derivative filter — a raw
+  500 Hz difference multiplies gyro noise ×500, which is *why* D could not be raised; now a
+  20 Hz one-pole (`PID_D_FILT_HZ`), with old/new agreeing <2% on smooth input so the tune is
+  preserved. And one NaN **permanently poisoned** an integrator (`constrain(NaN,…)` returns NaN)
+  — depth was the unguarded path.
+- **B7 (latent):** the CoB auto-trim only ever *added* to its trim and never bled the PID
+  integrator, so the same charge was re-transferred every cycle and the trim pinned at its clamp
+  in under a second. Now a true conservative hand-off via `bleedIntegral()`.
+- **B8 (latent):** AUTO was excluded from the drag/cross-coupling feedforward despite running the
+  same cascade — the model terms silently skipped the companion's mode.
+- **B9:** the AUTO depth-runaway guard was a **permanent no-op** (`depth0 = current depth`), so
+  AUTO had no depth protection at all. Now guards against `depth::target()`.
+- Plus stale comments corrected (200 Hz claims that were really 400/500, a stray **"Mongla"**
+  reference, the `DEF_ST_RPM_MAX` justification).
+
+**New `env:second-board`** — `example/2nd_board_firmware/` was 240 lines compiled by nothing.
+Promoted to `src/second_board/` and given the **ESP-NOW voltage sender it never had**: it only
+ever *received* (a C3 Mini's service voltage, purely to draw on its OLED). That is why
+`mixer::setBatteryVoltage()` and the low-thruster-battery failsafe were **both inert** — they
+consume a thruster-pack voltage nothing transmitted, and the control board's own ADC reads the
+*electronics* pack. Now broadcasts `magic/kill/voltage` at 4 Hz. Display code removed (the OLED
+lives on SROT), and the C3 receive dropped with it. Wire format moved to
+`shared/espnow_proto.h` so both boards compile one definition instead of a hand-copied comment.
+
+**New docs:** [AUDIT.md](AUDIT.md), [docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md) (including a
+substantial section on where **ArduSub is still clearly ahead** — no EKF, no position
+estimation, no replay logging, no redundancy, far more field testing), and
+[docs/BLUEOS.md](docs/BLUEOS.md).
+
+**Recommended upgrades, ranked by value per unit of risk:**
+1. ~~B1-B3~~ (done).
+2. ~~PID D-filter + anti-windup~~ (done) — now actually try raising `ATC_RAT_*_D` in the pool;
+   it was previously unusable.
+3. **`SET_MESSAGE_INTERVAL` (511) + a per-message rate table.** Currently rates are fixed, so a
+   companion cannot turn them *down* for a LoRa link. Cheap, and the standard mechanism.
+4. **SD binary logging at loop rate.** The single biggest debugging gap versus ArduSub: there is
+   no way to analyse a dive after the fact. Everything else on this list is easier once it exists.
+5. **A depth-*rate* inner loop.** DIVE currently ramps a position setpoint at `MOVE_DEPTH_RATE`;
+   a velocity loop would track a commanded descent rate properly and make `p3` meaningful.
+6. **`THR_POLE_PAIRS` as a runtime param** (compile-time today; 7 is T200-specific).
+7. **Gyro notch filter driven by the measured RPM.** This is the *classic* use of bidirectional
+   DShot and the one thing the RPM data is not yet used for — it is what would let the rate gains
+   go meaningfully higher.
+8. **Motor-current sensing on the 2nd board** for power-based thruster health (a fouled prop
+   draws current without RPM).
+9. Optional: complementary yaw-drift correction gated on thruster current, as the honest
+   successor to the one-shot magnetic alignment.
+
+- Build: all six envs SUCCESS; Bondor untouched (typecheck clean).
+- **Verify on hardware:** B1 (start a short move, trigger a param download, confirm the terminal
+  ACK still arrives); B2 (`RPM_LOOP=1` closes the loop with no rebuild); B3 (`STYLE` in AUTO does
+  not disarm); the 2nd-board link end-to-end (`ESPNOW_EN=1` + `MOT_BAT_V_MAX` → real thruster
+  voltage in Bondor, stale within 2 s of powering it down, knob toggles `KILL`).
+
 ### 2026-07-30 — Param backup/restore, explicit heading lock, one-shot magnetic yaw reference
 Three problems that surfaced from actually flying the board.
 

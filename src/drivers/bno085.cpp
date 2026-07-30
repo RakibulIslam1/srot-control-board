@@ -29,12 +29,12 @@ static uint32_t s_reset_count = 0;
 static uint32_t s_last_attitude_ms = 0;
 static bool     s_attitude_ever = false;
 
-// Report intervals. Attitude + rate run FAST (200 Hz) — matched to the 200 Hz
-// control loop, which is where the data is actually consumed. Gravity is only used
-// by level/accel calibration and changes slowly, so it stays at 50 Hz to keep the
-// (INT-less, polled) SHTP link lightly loaded. 200 Hz over I2C@200 kHz is ~1/3 bus
-// utilization; 400 Hz would push the no-INT link toward desync/resets — raise only
-// with the INT pin wired.
+// Report intervals. Attitude + rate run at the sensor's 400 Hz maximum, which the
+// 500 Hz sensor task oversamples cleanly (the 500 Hz control loop is what consumes
+// them). Gravity is only used by level/accel calibration and changes slowly, so it
+// stays at 50 Hz to keep the SHTP link lightly loaded. 400 Hz is only safe because
+// the INT pin IS wired (PIN_BNO_INT) and reads are INT-gated — without INT this rate
+// pushes the polled link toward desync/resets, so drop to 200 Hz if INT is ever lost.
 static const uint32_t REPORT_FAST_US = 2500;    // 400 Hz — rotation + gyro (sensor max)
 static const uint32_t REPORT_SLOW_US = 20000;   // 50 Hz  — gravity (cal only)
 

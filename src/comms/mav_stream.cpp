@@ -163,16 +163,17 @@ static void sendEscStatus(const Snap& s, uint32_t t) {
 // --- individual senders ------------------------------------------------------
 static void sendHeartbeat(const Snap& s) {
     mavlink_message_t m;
-    // Match ArduSub: stabilize + manual-input + custom-mode always; safety-armed
-    // when armed.
+    // base_mode advertises: we use a custom mode enum, we stabilize, and we accept
+    // manual input. SAFETY_ARMED reflects the real arm state.
     uint8_t base = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED |
                    MAV_MODE_FLAG_STABILIZE_ENABLED |
                    MAV_MODE_FLAG_MANUAL_INPUT_ENABLED;
     if (s.armed) base |= MAV_MODE_FLAG_SAFETY_ARMED;
     uint8_t st = s.leak ? MAV_STATE_CRITICAL
                : (s.armed ? MAV_STATE_ACTIVE : MAV_STATE_STANDBY);
-    // SROT-native identity: a generic autopilot on a submarine frame (no ArduPilot
-    // disguise — Bondor is the GCS now). custom_mode carries the SROT FlightMode.
+    // Honest identity: a GENERIC autopilot on a submarine frame. Hengla is not
+    // ArduPilot and does not claim to be, which is why a GCS's ArduPilot-gated setup
+    // pages stay empty (see docs/BLUEOS.md). custom_mode carries our own FlightMode.
     mavlink_msg_heartbeat_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
         MAV_TYPE_SUBMARINE, MAV_AUTOPILOT_GENERIC, base, (uint32_t)s.mode, st);
     mav::tx(m);
@@ -414,10 +415,10 @@ void sendHeartbeatNow() {
 }
 
 void sendBootIdentity() {
-    // SROT-native boot banner (Bondor is the GCS; no ArduSub version spoof).
+    // Honest own-name boot banner — Hengla firmware, no autopilot spoof of any kind.
     mavlink_message_t m;
     char banner[50];
-    snprintf(banner, sizeof(banner), "%s ready", SROT_FW_VERSION_STR);
+    snprintf(banner, sizeof(banner), "%s ready", HENGLA_FW_VERSION_STR);
     mavlink_msg_statustext_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
         MAV_SEVERITY_INFO, banner, 0, 0);
     mav::tx(m);
@@ -425,16 +426,20 @@ void sendBootIdentity() {
 
 void sendAutopilotVersion() {
     mavlink_message_t m;
-    uint8_t custom[8]  = {'S', 'R', 'O', 'T', 0, 0, 0, 0};
+    // flight_custom_version is 8 bytes, NOT null-terminated by the protocol — copy at
+    // most 8 and leave the rest zeroed rather than relying on strncpy semantics.
+    uint8_t custom[8] = {0};
+    { const char* n = HENGLA_MAV_CUSTOM_VER;
+      for (int i = 0; i < 8 && n[i]; ++i) custom[i] = (uint8_t)n[i]; }
     uint8_t zeros[8]   = {0};
     uint64_t caps = MAV_PROTOCOL_CAPABILITY_MAVLINK2 |
                     MAV_PROTOCOL_CAPABILITY_PARAM_FLOAT |
                     MAV_PROTOCOL_CAPABILITY_COMMAND_INT |
                     MAV_PROTOCOL_CAPABILITY_MISSION_INT;
-    // SROT-native version (no ArduSub spoof); flight_custom_version = "SROT".
+    // Real Hengla version. Vendor id = the SROT board, product id = this firmware.
     mavlink_msg_autopilot_version_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
-        caps, SROT_FW_VERSION_PACKED, 0, 0, 0,
-        custom, zeros, zeros, SROT_MAV_VENDOR_ID, SROT_MAV_PRODUCT_ID, 0, nullptr);
+        caps, HENGLA_FW_VERSION_PACKED, 0, 0, 0,
+        custom, zeros, zeros, HENGLA_MAV_VENDOR_ID, HENGLA_MAV_PRODUCT_ID, 0, nullptr);
     mav::tx(m);
 }
 
@@ -447,16 +452,43 @@ static void sendMoveAck(const Snap& s, uint8_t result, uint8_t progress) {
 }
 
 // Stream SROT_MOVE feedback: IN_PROGRESS ACKs (~3 Hz) with % + live state via
-// NAMED_VALUE_FLOAT, then one ACCEPTED ACK on completion → Mongla Move-action result.
+// NAMED_VALUE_FLOAT, then one ACCEPTED ACK on completion → the companion's move-action result.
 static void updateMove(const Snap& s, uint32_t now) {
-    static uint32_t s_seq = 0;   // seq currently being tracked (0 = idle)
+    static uint32_t s_seq = 0;          // seq currently being tracked (0 = idle)
     static uint32_t t_ack = 0;
+    static bool     s_seen_active = false;   // the control loop confirmed it started
+    static uint32_t s_track_ms = 0;
 
     // A new (or preempting) command started → track it, ACK immediately.
-    if (s.mv_seq != 0 && s.mv_seq != s_seq && s.mv_active) { s_seq = s.mv_seq; t_ack = 0; }
+    // Track on the seq change ALONE — do not require mv_active. A short move can start
+    // AND finish before this function next runs (it used to be skipped entirely for the
+    // duration of a parameter download), and mv_active is false again by then. Gating on
+    // it left s_seq at 0, so no terminal ACK was ever sent and the companion's action
+    // waited forever on a result that had already happened.
+    if (s.mv_seq != 0 && s.mv_seq != s_seq) {
+        s_seq = s.mv_seq; t_ack = 0; s_seen_active = false; s_track_ms = now;
+    }
     if (s_seq == 0) return;
+    if (s.mv_active) s_seen_active = true;
 
-    bool done = (s.mv_done_seq == s_seq) || (!s.mv_active && s.mv_seq == s_seq);
+    // Never resolve on "!mv_active" until we have actually SEEN it active: on the first
+    // cycle after a command, mv_active is still false simply because the control loop has
+    // not run yet, and treating that as completion would ACK 100% before the move began.
+    // mv_done_seq is latched by the control loop, so a completion we missed is still
+    // recoverable however late we get here.
+    //
+    // The escape hatch: the command handler forces AUTO, but the control loop REFUSES
+    // AUTO when there is no depth sensor and falls back to STABILIZE. The move then never
+    // starts and nothing would ever resolve it — so fail it explicitly instead of
+    // streaming IN_PROGRESS for ever.
+    if (!s_seen_active && s.mode != (uint8_t)FlightMode::AUTO && (now - s_track_ms) > 500) {
+        sendMoveAck(s, MAV_RESULT_FAILED, 0);
+        sendNamed(now, "MV_STATE", 0);
+        s_seq = 0;
+        return;
+    }
+
+    bool done = (s.mv_done_seq == s_seq) || (s_seen_active && !s.mv_active);
     if (done) {
         sendMoveAck(s, MAV_RESULT_ACCEPTED, 100);
         sendNamed(now, "MV_STATE", 0);
@@ -483,6 +515,13 @@ void update(uint32_t now) {
     updateCalReports(now);
     reportEscNotDetected(s);   // edge-triggered "not detected" (no telemetry) announcements
 
+    // Move progress/completion ACKs run BEFORE the param-download throttle below. They
+    // are ~40 B at 3 Hz, so the bandwidth argument for suppressing them does not apply —
+    // and suppressing them meant a move that completed inside a download window never got
+    // its terminal ACK at all, hanging the companion's action. A GCS opening its Setup tab
+    // (which triggers a download) must not be able to strand a move in flight.
+    updateMove(s, now);        // AUTO move progress/completion ACKs (SROT_MOVE)
+
     // While the GCS is downloading the parameter list, throttle everything except the
     // heartbeat so the download completes fast (→ setup tabs latch) and doesn't starve
     // the reliable PARAM_VALUE sends of TX bandwidth.
@@ -494,8 +533,6 @@ void update(uint32_t now) {
         if (now - t_esc >= 200) { t_esc = now; sendEscStatus(s, now); }
         return;
     }
-
-    updateMove(s, now);        // AUTO move progress/completion ACKs (SROT_MOVE)
 
     if (now - t_hb  >= 1000) { t_hb  = now; sendHeartbeat(s); }
     if (now - t_sys >= 500)  { t_sys = now; sendSysStatus(s); }

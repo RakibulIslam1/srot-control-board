@@ -1,4 +1,12 @@
-# SROT — Parameter Reference (complete)
+# Hengla — Parameter Reference (complete)
+
+> **On the naming.** Parameter IDs follow the **ArduPilot convention** (`ATC_RAT_RLL_P`, `MOT_*`,
+> `FS_*`, `PILOT_*`, `SERVOn_*`, `BTNn_FUNCTION`). That is a deliberate choice, not a claim of
+> lineage: the names are descriptive, widely understood by anyone who has tuned a vehicle, and
+> keeping them means every `.params` backup you have already exported stays valid. Hengla is
+> **not** ArduSub — the heartbeat reports `MAV_AUTOPILOT_GENERIC` — and nothing in the firmware
+> pretends otherwise. See [docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md) and
+> [docs/BLUEOS.md](docs/BLUEOS.md).
 
 Every parameter in the live table, documented: **113** scalar params + **26** calibration
 views + **80** servo params (16 channels × 5).

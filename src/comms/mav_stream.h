@@ -1,19 +1,19 @@
 #pragma once
 
 // =============================================================================
-//  comms/mav_stream — periodic MAVLink telemetry senders + SROT identity
+//  comms/mav_stream — periodic MAVLink telemetry senders + firmware identity
 // =============================================================================
 
 #include <Arduino.h>
 
 namespace mav_stream {
 
-// Send the SROT boot identity: a STATUSTEXT banner "SROT Vx.y.z" that QGC parses
-// into the firmware-version field. Call once after the link is up.
+// Send the boot identity: a STATUSTEXT banner "Hengla vx.y.z ready", which a GCS
+// parses into its firmware-version field. Call once after the link is up.
 void sendBootIdentity();
 
-// Send AUTOPILOT_VERSION (SROT vendor/product + flight_custom_version "SROT").
-// Sent in response to a capabilities request.
+// Send AUTOPILOT_VERSION (SROT board vendor id + Hengla product id, and
+// flight_custom_version = "HENGLA"). Sent in response to a capabilities request.
 void sendAutopilotVersion();
 
 // Rate-scheduled telemetry. Call frequently from Task_MAVLink with millis().
