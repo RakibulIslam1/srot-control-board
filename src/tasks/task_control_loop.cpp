@@ -424,14 +424,22 @@ void Task_ControlLoop(void* pv) {
         prev_mtune = mt_active;
 
         // Safety monitor: while a tune OR AUTO move is armed, a tumble/spin-out (and RPM/NaN)
-        // aborts the maneuver + DISARMS. (AUTO passes depth0 = current depth → dives are intended,
-        // not flagged as runaway; the leak/battery/GCS surface-failsafe below still applies.)
+        // aborts the maneuver + DISARMS. The leak/battery/GCS surface-failsafe below is separate.
         bool auto_armed = (in.mode == FlightMode::AUTO) && in.armed;
         if ((at_active || mt_active || auto_armed) && in.armed) {
             const char* why = nullptr;
-            float d0 = (at_active || mt_active) ? at_depth0 : in.depth;
+            // Depth reference for the runaway guard. A tune must not move depth at all, so it
+            // is checked against where it started. AUTO *commands* depth, so check against the
+            // active SETPOINT instead: passing the current depth (as this did) made the delta
+            // identically zero, i.e. AUTO had no depth protection whatsoever. depth::target()
+            // is one cycle stale at 500 Hz, which is irrelevant next to ST_DEPTH_DELTA.
+            float d0 = (at_active || mt_active) ? at_depth0 : depth::target();
+            // A STYLE move is a commanded 360 deg roll — it passes ST_ANGLE_MAX almost at once
+            // and used to disarm itself mid-spin. Exempt only the angle guard.
+            bool spinning = auto_armed && (movement::type() == movement::Type::STYLE);
             bool safe = safety_monitor::ok(in.roll, in.pitch, in.gx, in.gy, in.gz, in.depth, d0,
-                                           mt_active ? in.rpm : nullptr, mt_active ? NUM_THRUSTERS : 0, &why);
+                                           mt_active ? in.rpm : nullptr, mt_active ? NUM_THRUSTERS : 0, &why,
+                                           spinning);
             if (!safe) {
                 autotune::abort(); motor_tune::abort(); movement::abort();
                 char b[64]; snprintf(b, sizeof(b), "Disarmed: %s", why ? why : "safety abort");
@@ -446,7 +454,7 @@ void Task_ControlLoop(void* pv) {
         // 0 volts (no fresh ESP-NOW source) leaves the output uncompensated.
         mixer::setBatteryVoltage(in.thr_volts, dt);
 
-        // --- Failsafes (ArduSub-style) → controlled SURFACE ascent. ---
+        // --- Failsafes → controlled SURFACE ascent. ---
         if (in.mode != FlightMode::SURFACE) {
             bool fs = false;
             const char* fs_why = nullptr;

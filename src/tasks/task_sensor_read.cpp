@@ -36,8 +36,8 @@ void Task_SensorRead(void* pv) {
     bar30::Sample  baro;
     analog_mon::Sample an;
 
-    // Decimation counters (200 Hz base). Bar30 read busy-waits ~2-3 ms, so keep it
-    // well off the 200 Hz path: ~20 Hz is plenty for depth.
+    // Decimation counters off the TASK_SENSOR_HZ (500 Hz) base. A Bar30 read busy-waits
+    // ~2-3 ms, so keep it well off the fast path: ~20 Hz is plenty for depth.
     const uint16_t BARO_DIV  = TASK_SENSOR_HZ / 20;   // ~20 Hz when healthy
     const uint8_t  ANLG_DIV  = TASK_SENSOR_HZ / 10;   // ~10 Hz
     uint16_t baro_cnt = 0, baro_div = BARO_DIV;       // baro_div backs off if reads fail

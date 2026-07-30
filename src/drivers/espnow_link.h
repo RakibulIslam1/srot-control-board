@@ -1,29 +1,24 @@
 #pragma once
 
 // =============================================================================
-//  drivers/espnow_link — ESP-NOW receive-only link from the 2nd board (P11)
+//  drivers/espnow_link — ESP-NOW receive-only link from the 2nd board
 //
-//  The 2nd board broadcasts thruster-kill state + an aux voltage; this board
-//  receives them (WiFi STA, no association). Main sends nothing back.
+//  The 2nd board (src/second_board, env:second-board) broadcasts thruster-kill state
+//  and the THRUSTER-pack voltage; this board receives them (WiFi STA, no
+//  association) and sends nothing back.
 //
-//  Packet contract (the 2nd board must send exactly this, little-endian):
-//     struct EspNowFromSecond { uint8_t magic=0x53; uint8_t thruster_kill;
-//                               float aux_voltage; }   // 6 bytes
+//  The wire format lives in shared/espnow_proto.h so both boards compile the SAME
+//  definition — it used to be a hand-copied comment here, which is how two boards
+//  end up disagreeing about a format with no version field.
 // =============================================================================
 
 #include <Arduino.h>
+#include "espnow_proto.h"      // shared with src/second_board
 
 namespace espnow_link {
 
-#pragma pack(push, 1)
-struct FromSecond {
-    uint8_t magic;          // 0x53 ('S')
-    uint8_t thruster_kill;  // 0/1
-    float   aux_voltage;    // volts
-};
-#pragma pack(pop)
-
-constexpr uint8_t MAGIC = 0x53;
+using FromSecond = espnow_from_second_t;
+constexpr uint8_t MAGIC = ESPNOW_MSG_MAGIC;
 
 // Bring up WiFi STA + ESP-NOW on ESPNOW_CHANNEL and register the RX callback.
 // Returns false if ESP-NOW init fails. No-op if ESPNOW_ENABLE is 0.

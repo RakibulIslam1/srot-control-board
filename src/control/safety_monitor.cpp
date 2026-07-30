@@ -12,13 +12,18 @@ namespace safety_monitor {
 static const float R2D = 57.2957795f;
 
 bool ok(float roll, float pitch, float gx, float gy, float gz,
-        float depth, float depth0, const int16_t* rpm, int n_rpm, const char** why) {
+        float depth, float depth0, const int16_t* rpm, int n_rpm, const char** why,
+        bool allow_inverted) {
     auto fail = [&](const char* r) { if (why) *why = r; return false; };
 
     if (!isfinite(roll) || !isfinite(pitch)) return fail("attitude NaN");
 
-    const float amax = g_params.st_angle_max;
-    if (fabsf(roll) * R2D > amax || fabsf(pitch) * R2D > amax) return fail("angle limit");
+    // Tumbling guard — skipped for a commanded spin (STYLE/STUNT), which is *supposed* to
+    // go past vertical. Every other guard below still applies.
+    if (!allow_inverted) {
+        const float amax = g_params.st_angle_max;
+        if (fabsf(roll) * R2D > amax || fabsf(pitch) * R2D > amax) return fail("angle limit");
+    }
 
     const float rmax = g_params.st_rate_max;
     if (fabsf(gx) * R2D > rmax || fabsf(gy) * R2D > rmax || fabsf(gz) * R2D > rmax)

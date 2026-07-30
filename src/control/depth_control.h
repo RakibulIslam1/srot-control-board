@@ -28,4 +28,9 @@ float target();
 // Depth-PID integrator state (for CoB vertical auto-trim).
 float integral();
 
+// Remove `amount` of accumulated integrator (never past zero, never sign-flipping).
+// The CoB auto-trim calls this after transferring that effort into its own feedforward
+// trim, so the effort is HANDED OVER rather than duplicated.
+void bleedIntegral(float amount);
+
 }  // namespace depth

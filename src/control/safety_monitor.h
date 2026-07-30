@@ -14,7 +14,14 @@ namespace safety_monitor {
 
 // Returns true if all guards pass. On a violation returns false and sets *why.
 // Pass rpm=nullptr / n_rpm=0 to skip the RPM check (flight-loop autotune).
+//
+// `allow_inverted` suppresses ONLY the tumbling-angle guard, for manoeuvres that are
+// *meant* to exceed it — a STYLE/STUNT 360 deg roll trips ST_ANGLE_MAX (70 deg) within a
+// fraction of a turn, which used to disarm the vehicle mid-spin every single time. The
+// rate, depth and RPM guards still apply, and those are what catch a genuine tumble or
+// spin-out; a commanded roll is rate-limited by the spin controller.
 bool ok(float roll, float pitch, float gx, float gy, float gz,
-        float depth, float depth0, const int16_t* rpm, int n_rpm, const char** why);
+        float depth, float depth0, const int16_t* rpm, int n_rpm, const char** why,
+        bool allow_inverted = false);
 
 }  // namespace safety_monitor

@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-//  comms/mission — MAVLink mission upload/download (ArduSub-style)
+//  comms/mission — MAVLink mission upload/download (standard MISSION_* protocol)
 //
 //  Implements the standard MISSION_* handshake so QGC/BlueOS can upload and
 //  download a waypoint mission over MAVLink. LoRa mission upload is an extra,

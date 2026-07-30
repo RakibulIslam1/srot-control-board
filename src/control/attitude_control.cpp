@@ -126,6 +126,14 @@ float rateIntegral(int axis) {
     }
 }
 
+void bleedRateIntegral(int axis, float amount) {
+    switch (axis) {
+        case 0:  s_rate_roll.bleedIntegral(amount);  break;
+        case 1:  s_rate_pitch.bleedIntegral(amount); break;
+        default: s_rate_yaw.bleedIntegral(amount);   break;
+    }
+}
+
 float rateAxis(int axis, float rate_cmd, float meas_rate, float dt) {
     loadGains();
     switch (axis) {

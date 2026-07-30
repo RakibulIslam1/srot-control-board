@@ -1,6 +1,6 @@
 // =============================================================================
-//  SROT FLIGHT CONTROLLER — main.cpp
-//  MAVLink-native ArduSub-clone firmware | ESP32 DevKit V1 | dual-core FreeRTOS
+//  HENGLA — main.cpp  (firmware for the SROT control board)
+//  MAVLink-native AUV/ROV flight control | ESP32 DevKit V1 | dual-core FreeRTOS
 //
 //  Boot sequence (Phase 0 foundation):
 //    1. Strapping-pin safety: force GPIO12/15 LOW and keep the buzzer (GPIO32) quiet.
@@ -100,7 +100,7 @@ void setup() {
     // Bench bring-up only (no GCS attached): confirm identity on the wire.
     delay(200);
     MAVLINK_SERIAL.println();
-    MAVLINK_SERIAL.println(SROT_FW_VERSION_STR "  (" SROT_BUILD_DATE ")");
+    MAVLINK_SERIAL.println(HENGLA_FW_VERSION_STR "  (" HENGLA_BUILD_DATE ")");
     MAVLINK_SERIAL.println("SROT foundation boot — dual-core, 6 tasks");
 #endif
 

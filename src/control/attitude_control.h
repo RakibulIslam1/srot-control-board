@@ -50,4 +50,9 @@ float rateAxis(int axis, float rate_cmd, float meas_rate, float dt);
 // CoB auto-trim to learn the steady bias holding against static buoyancy torque.
 float rateIntegral(int axis);
 
+// Remove `amount` of accumulated rate-PID integrator on one axis (never past zero,
+// never sign-flipping). The CoB auto-trim calls this after moving that effort into its
+// own feedforward trim, so the effort is HANDED OVER rather than counted twice.
+void bleedRateIntegral(int axis, float amount);
+
 }  // namespace attitude

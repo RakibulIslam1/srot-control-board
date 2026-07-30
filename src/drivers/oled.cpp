@@ -73,8 +73,10 @@ void splash(float progress) {
     int fw = (int)(progress * 80.0f + 0.5f);
     if (fw > 0) s_disp.fillRoundRect(24, 30, fw, 10, 3, SH110X_WHITE);  // grows L→R
     s_disp.setTextSize(1);
-    s_disp.setCursor(31, 50);                // version (11×6=66px) centred, gap below bar
-    s_disp.print(SROT_FW_VERSION_STR);
+    // The BOARD name ("SROT") is the big text above; this line names the FIRMWARE.
+    // "Hengla v0.2.0" = 13 chars x 6px = 78px, so x = (128-78)/2 = 25.
+    s_disp.setCursor(25, 50);
+    s_disp.print(HENGLA_FW_VERSION_STR);
     s_disp.display();
 }
 

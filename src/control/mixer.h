@@ -4,9 +4,9 @@
 //  control/mixer — Vectored-8 thrust allocation
 //
 //  Maps the six body-axis demands (roll, pitch, yaw, throttle/heave, forward,
-//  lateral), each in −1..1, onto 8 thruster outputs using the ArduSub
-//  SUB_FRAME_VECTORED_6DOF matrix. Motors 1–4 = horizontal (yaw/surge/sway);
-//  motors 5–8 = vertical (heave/roll/pitch).
+//  lateral), each in −1..1, onto 8 thruster outputs with the standard vectored
+//  6-DOF allocation matrix for this frame. Motors 1–4 = horizontal, mounted at 45°
+//  (yaw/surge/sway); motors 5–8 = vertical (heave/roll/pitch). See docs/THRUSTER_MAP.md.
 // =============================================================================
 
 #include <Arduino.h>
