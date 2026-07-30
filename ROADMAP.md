@@ -159,6 +159,63 @@ default 0/off → unchanged until tuned; math in `ALGORITHMS.md §5`):
 > `tuning_guide.md` → `ARCHITECTURE.md`; `WIRING.md` → `HARDWARE.md`; `plan.md`/
 > `ideas_and_progress.md` → this file; `pico_thruster/` → `src/pico/`.
 
+### 2026-07-30 — Param backup/restore, explicit heading lock, one-shot magnetic yaw reference
+Three problems that surfaced from actually flying the board.
+
+- **Params were being lost on reflash — and it was our own doing.** NVS survives an upload, but
+  `PARAM_DEFAULTS_VER` has been bumped **four times**, and each bump makes `params::init()`
+  rewrite every parameter from its `DEF_*`. There was no way to back tuning up. Fixed with
+  **Export/Import in Bondor** (`Parameters` tab): a QGC-compatible `.params` file, a **diff
+  dialog** before anything is written, a throttled write **confirmed per-parameter against the
+  `PARAM_VALUE` echo** with retries, and named failures (a half-applied restore reporting
+  success would be the worst outcome). Export is blocked until the full list has downloaded —
+  a partial file would silently restore defaults for what was missing.
+  New `bondor/src/renderer/src/utils/{files,paramFile}.ts`, `writeParams()` in the store.
+- **Calibration is now in the backup too.** `g_state.cal` (accel/mag/level trim + the 8
+  MOTOR_DETECT directions) lives in `NVS_NS_CAL` and was unreachable over MAVLink — the most
+  painful thing to redo, since mag cal means spinning the vehicle. Added **26 `CAL_*`
+  parameters** as a **view**, not a copy: `Desc.cal_id` + `calGet`/`calSet` read/write
+  `g_state.cal` under `mtx_cal` and persist via the existing deferred `persist_pending` →
+  `calibration::saveToNVS()` path. They own **no key in `NVS_NS_PARAMS`** (one source of truth;
+  NVS `0x5000` has no room), and are excluded from the defaults-bump rewrite, from
+  `resetAllToDefaults()`, and from `saveAll()`. A lock miss on read returns the last known value
+  rather than 0 — reporting 0 would let a GCS write a zeroed cal back over the real one.
+  Also added `SYS_PARAM_VER` **[i]** so an exported file records the schema it came from.
+  **`PARAM_DEFAULTS_VER` deliberately NOT bumped** — these are additions, so absent NVS keys
+  fall back to their defaults and existing tuning survives this update.
+- **Heading lock in AUTO is now explicit, and a real TURN bug is fixed.** Heading hold already
+  worked (a centred yaw demand latches `s_yaw_target`), but nothing *guaranteed* it. Added
+  `attitude::holdYaw()`; `movement` raises a one-shot `Demand.yaw_lock` so **every translate leg
+  (`FWD`/`BACK`/`LEFT`/`RIGHT`/`HOLD`/`STOP`/`DIVE`) locks the heading it started with**, held
+  through cruise and braking. **Bug:** a completed `TURN` inherited `measured_yaw` at the instant
+  the ±0.03 rad (~1.7°) completion test passed, so "turn to 90°" settled anywhere in 88.3–91.7°
+  and then held that error — compounding across a sequence of turns. It now locks the
+  **commanded** `s_target_yaw`. `ARC` excluded (it commands yaw rate). `MANUAL` unchanged: raw
+  passthrough, no holds — it must stay a genuine unstabilized escape hatch.
+- **One-shot magnetic yaw reference** (`control/yaw_ref.{h,cpp}`, `MAG_YAW_REF` default **0**).
+  Attitude stays on `GAME_ROTATION_VECTOR` (mag never fused, so thruster current can't move it);
+  the mag is read **once** at boot — disarmed, still, ≥100 samples over ≥1 s — to compute
+  `offset = magnetic_heading − game_yaw`, applied at the single point where yaw is published so
+  heading-hold, absolute `TURN`, `ATTITUDE` and `VFR_HUD` cannot disagree. Tilt-compensated
+  (a bare `atan2(my,mx)` is only valid level); headings averaged as **unit vectors** (an angle
+  mean lands 180° wrong across ±π), with the resultant length doubling as the stability gate.
+  **Fails safe:** low mag accuracy, field outside 25–65 µT, or unstable samples all *refuse*,
+  leaving offset 0 = today's relative yaw. Every outcome, refusals included, goes out as
+  `STATUSTEXT`. `MAG_ALIGN` re-triggers, refused while armed. `BNO_USE_MAG` back to **1** — that
+  enables the mag *report* only, never the fusion.
+  **Honest limitation, documented everywhere:** this fixes the *reference*, not the *drift*
+  (~0.5–3 °/min remains). Fixing drift needs a continuous mag correction, i.e. exactly the motor
+  sensitivity the 6-axis fusion exists to avoid.
+- Docs: `PARAMETERS.md` (backup warning, `MAG_*`, `CAL_*`), `JETSON_COMMS.md`
+  (**sign-conventions table** — depth positive-down internally, `VFR_HUD.alt = −depth` on the
+  wire — plus the heading-lock guarantee), `ALGORITHMS.md` §1/§3, `ARCHITECTURE.md`,
+  `bondor/README.md` (the reflash routine).
+- Build: ESP32 **SUCCESS** (RAM 24.2%, Flash 29.1%); Pico unaffected; Bondor typecheck + build clean.
+- **Verify on hardware:** export→bump `PARAM_DEFAULTS_VER`→flash→import round-trip incl. a
+  `CAL_*` and `CAL_MDIR*`; absolute `TURN 90` settling at 90.0°; mag alignment at four compass
+  headings (watch for a **mirrored** tilt-comp axis) and that yaw does *not* jump under full
+  thrust; and the refusal path with the mag deliberately disturbed.
+
 ### 2026-07-28 — ESP32 4-way ESC flasher env (flash 4 ESCs at once); dropped the Uno env
 - The Arduino Uno 4-way firmware (BrushlessPower 328P) **would not handshake** with esc-configurator
   reliably (SoftwareSerial/reset). Replaced it with an **`esp32_4way` env** (`src/esp32_4way/`): the
@@ -751,6 +808,8 @@ example uses the INT pin. Fixes (software-only, INT stays unwired):
 - **Magnetometer off** (`BNO_USE_MAG 0`): mag report no longer enabled; attitude
   already used the 6-axis game rotation vector. Yaw is relative (accepted). MAG
   cal is a no-op when mag is off.
+  *(Superseded 2026-07-30: `BNO_USE_MAG` is back to 1 so the mag REPORT is available
+  to `control/yaw_ref`. The mag is still never fused into attitude.)*
 - **MAVLink reboot**: `MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN` → ack + `ESP.restart()`
   (QGC/BlueOS "Reboot Vehicle").
 - **P11 ESP-NOW receive-only** (`drivers/espnow_link`): WiFi STA + fixed channel

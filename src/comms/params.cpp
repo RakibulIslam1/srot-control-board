@@ -10,6 +10,7 @@
 #include "comms/params.h"
 #include <Preferences.h>
 #include "config.h"
+#include "state_types.h"   // g_state.cal — backing store for the CAL_* rows
 
 Params g_params;
 
@@ -19,15 +20,109 @@ namespace params {
 // compiled default — surfaced to the GCS once the MAVLink link is up.
 static bool s_defaults_were_forced = false;
 
+// --- calibration-as-parameters ------------------------------------------------
+// Sensor calibration lives in g_state.cal and persists to a SEPARATE NVS namespace
+// (NVS_NS_CAL) written by calibration::saveToNVS(). It is exposed here as read/write
+// parameters purely so a GCS can back it up and restore it — the mag/accel/level cal
+// and the MOTOR_DETECT directions are otherwise unrecoverable after an NVS wipe, and
+// redoing the mag cal means physically spinning the vehicle.
+//
+// These rows are a VIEW, not a copy: they never touch s_prefs and are never seeded
+// from a DEF_*. Duplicating them into NVS_NS_PARAMS would create a second source of
+// truth that goes stale the moment a calibration routine runs (and NVS is only 0x5000,
+// already tight for the existing table).
+enum : uint8_t {
+    CALP_NONE = 0,
+    CALP_GYRO_OX, CALP_GYRO_OY, CALP_GYRO_OZ,
+    CALP_ACC_OX,  CALP_ACC_OY,  CALP_ACC_OZ,
+    CALP_ACC_SX,  CALP_ACC_SY,  CALP_ACC_SZ,
+    CALP_MAG_OX,  CALP_MAG_OY,  CALP_MAG_OZ,
+    CALP_MAG_SX,  CALP_MAG_SY,  CALP_MAG_SZ,
+    CALP_BARO_Z,  CALP_LVL_R,   CALP_LVL_P,
+    CALP_MDIR1,   // .. CALP_MDIR1 + 7 for the 8 thrusters
+    CALP_MDIR_LAST = CALP_MDIR1 + NUM_THRUSTERS - 1,
+    CALP_COUNT
+};
+
+// Last successfully-read value per id. mtx_cal is contended by the 500 Hz flight loop,
+// so a read CAN miss the lock — returning 0 there would make a param download report a
+// bogus calibration (and, if the GCS then wrote that file back, destroy the real one).
+// Serving the last known value instead keeps a miss harmless.
+static float s_cal_shadow[CALP_COUNT] = {0};
+
+// Resolve a cal id to its float field. motor_dir is int8_t and handled separately.
+static float* calField(uint8_t id, CalState& c) {
+    switch (id) {
+        case CALP_GYRO_OX: return &c.gyro_offset.x;
+        case CALP_GYRO_OY: return &c.gyro_offset.y;
+        case CALP_GYRO_OZ: return &c.gyro_offset.z;
+        case CALP_ACC_OX:  return &c.accel_offset.x;
+        case CALP_ACC_OY:  return &c.accel_offset.y;
+        case CALP_ACC_OZ:  return &c.accel_offset.z;
+        case CALP_ACC_SX:  return &c.accel_scale.x;
+        case CALP_ACC_SY:  return &c.accel_scale.y;
+        case CALP_ACC_SZ:  return &c.accel_scale.z;
+        case CALP_MAG_OX:  return &c.mag_offset.x;
+        case CALP_MAG_OY:  return &c.mag_offset.y;
+        case CALP_MAG_OZ:  return &c.mag_offset.z;
+        case CALP_MAG_SX:  return &c.mag_scale.x;
+        case CALP_MAG_SY:  return &c.mag_scale.y;
+        case CALP_MAG_SZ:  return &c.mag_scale.z;
+        case CALP_BARO_Z:  return &c.baro_zero_mbar;
+        case CALP_LVL_R:   return &c.level_roll_off;
+        case CALP_LVL_P:   return &c.level_pitch_off;
+        default:           return nullptr;
+    }
+}
+
+static float calGet(uint8_t id) {
+    if (id == CALP_NONE || id >= CALP_COUNT) return 0.0f;
+    StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(5));
+    if (!lk.ok()) return s_cal_shadow[id];          // lock miss -> last known good
+    float v;
+    if (id >= CALP_MDIR1 && id <= CALP_MDIR_LAST) {
+        v = (float)g_state.cal.motor_dir[id - CALP_MDIR1];
+    } else {
+        float* f = calField(id, g_state.cal);
+        v = f ? *f : 0.0f;
+    }
+    s_cal_shadow[id] = v;
+    return v;
+}
+
+static bool calSet(uint8_t id, float value) {
+    if (id == CALP_NONE || id >= CALP_COUNT) return false;
+    StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(5));
+    if (!lk.ok()) return false;                     // caller sees the write fail, not a lie
+    if (id >= CALP_MDIR1 && id <= CALP_MDIR_LAST) {
+        // Only ±1 is meaningful; the control loop treats 0 as +1 anyway.
+        g_state.cal.motor_dir[id - CALP_MDIR1] = (value >= 0.0f) ? 1 : -1;
+    } else {
+        float* f = calField(id, g_state.cal);
+        if (!f) return false;
+        *f = value;
+    }
+    s_cal_shadow[id] = value;
+    // Flushed to NVS_NS_CAL by mav_commands::update() on Core 0 — never a flash write
+    // from here, which may be the MAVLink task mid-parse.
+    g_state.cal.persist_pending = true;
+    return true;
+}
+
 struct Desc {
     const char* name;    // MAVLink param_id (≤16)
     const char* nvskey;  // NVS key (≤15)
     float*      ptr;
     float       def;
+    uint8_t     cal_id;  // 0 = ordinary param; else a CALP_* view onto g_state.cal
 };
 
 // Scalar params (name == nvskey; all ≤15 chars).
 static const Desc SCALARS[] = {
+    // Informational: which defaults schema this firmware was built with. Forced in init()
+    // and read by nothing, so it is safe to import from a file. Lets an exported backup
+    // record whether it predates a PARAM_DEFAULTS_VER bump.
+    { "SYS_PARAM_VER", "SYS_PARAM_VER", &g_params.param_ver, (float)PARAM_DEFAULTS_VER },
     { "STUNT_SPIN_CNT", "STUNT_SPIN_CNT", &g_params.stunt_spin_cnt, DEF_STUNT_SPIN_CNT },
     { "STUNT_RATE",     "STUNT_RATE",     &g_params.stunt_rate,     DEF_STUNT_RATE     },
     { "HEADROOM_DEPTH", "HEADROOM_DEPTH", &g_params.headroom_depth, DEF_HEADROOM_DEPTH },
@@ -147,6 +242,11 @@ static const Desc SCALARS[] = {
     { "THR_TRIM_MAX",   "THR_TRIM_MAX",   &g_params.thr_trim_max,   DEF_THR_TRIM_MAX },
     { "MOT_BAT_V_MIN",  "MOT_BAT_V_MIN",  &g_params.mot_bat_v_min,  DEF_MOT_BAT_V_MIN },
     { "MOT_BAT_V_MAX",  "MOT_BAT_V_MAX",  &g_params.mot_bat_v_max,  DEF_MOT_BAT_V_MAX },
+    // One-shot magnetic yaw reference (control/yaw_ref). Default OFF: yaw stays relative
+    // and the vehicle behaves exactly as before until you calibrate the mag and opt in.
+    { "MAG_YAW_REF",    "MAG_YAW_REF",    &g_params.mag_yaw_ref,    DEF_MAG_YAW_REF },
+    { "MAG_DECL",       "MAG_DECL",       &g_params.mag_decl,       DEF_MAG_DECL },
+    { "MAG_ALIGN",      "MAG_ALIGN",      &g_params.mag_align,      0.0f },
     // Configurable GPIOs (defaults = the wired pinout; reboot to apply).
     // (PIN_THR1..8 removed — thrusters are on the Pico co-processor by default; the
     //  RMT fallback uses the fixed compile-time THRUSTER_PINS in config.h.)
@@ -158,6 +258,38 @@ static const Desc SCALARS[] = {
     { "PIN_SDCS",     "PIN_SDCS",     &g_params.pin_sdcs,     (float)PIN_SD_CS },
     { "PIN_LORACS",   "PIN_LORACS",   &g_params.pin_loracs,   (float)PIN_LORA_CS },
     { "PIN_LORADIO",  "PIN_LORADIO",  &g_params.pin_loradio,  (float)PIN_LORA_DIO0 },
+
+    // --- Sensor calibration (VIEW onto g_state.cal — see the CALP_* block above) ---
+    // ptr is null and def is unused for these: they read/write g_state.cal through
+    // calGet/calSet and persist to NVS_NS_CAL, not NVS_NS_PARAMS. Exposed so a GCS can
+    // export/import them; a defaults bump and PREFLIGHT_STORAGE-reset both leave them
+    // alone. Editing these by hand is a good way to break your attitude solution.
+    { "CAL_GYRO_OX", "", nullptr, 0.0f, CALP_GYRO_OX },
+    { "CAL_GYRO_OY", "", nullptr, 0.0f, CALP_GYRO_OY },
+    { "CAL_GYRO_OZ", "", nullptr, 0.0f, CALP_GYRO_OZ },
+    { "CAL_ACC_OX",  "", nullptr, 0.0f, CALP_ACC_OX  },
+    { "CAL_ACC_OY",  "", nullptr, 0.0f, CALP_ACC_OY  },
+    { "CAL_ACC_OZ",  "", nullptr, 0.0f, CALP_ACC_OZ  },
+    { "CAL_ACC_SX",  "", nullptr, 1.0f, CALP_ACC_SX  },
+    { "CAL_ACC_SY",  "", nullptr, 1.0f, CALP_ACC_SY  },
+    { "CAL_ACC_SZ",  "", nullptr, 1.0f, CALP_ACC_SZ  },
+    { "CAL_MAG_OX",  "", nullptr, 0.0f, CALP_MAG_OX  },
+    { "CAL_MAG_OY",  "", nullptr, 0.0f, CALP_MAG_OY  },
+    { "CAL_MAG_OZ",  "", nullptr, 0.0f, CALP_MAG_OZ  },
+    { "CAL_MAG_SX",  "", nullptr, 1.0f, CALP_MAG_SX  },
+    { "CAL_MAG_SY",  "", nullptr, 1.0f, CALP_MAG_SY  },
+    { "CAL_MAG_SZ",  "", nullptr, 1.0f, CALP_MAG_SZ  },
+    { "CAL_BARO_Z",  "", nullptr, 0.0f, CALP_BARO_Z  },
+    { "CAL_LVL_R",   "", nullptr, 0.0f, CALP_LVL_R   },
+    { "CAL_LVL_P",   "", nullptr, 0.0f, CALP_LVL_P   },
+    { "CAL_MDIR1",   "", nullptr, 1.0f, CALP_MDIR1 + 0 },
+    { "CAL_MDIR2",   "", nullptr, 1.0f, CALP_MDIR1 + 1 },
+    { "CAL_MDIR3",   "", nullptr, 1.0f, CALP_MDIR1 + 2 },
+    { "CAL_MDIR4",   "", nullptr, 1.0f, CALP_MDIR1 + 3 },
+    { "CAL_MDIR5",   "", nullptr, 1.0f, CALP_MDIR1 + 4 },
+    { "CAL_MDIR6",   "", nullptr, 1.0f, CALP_MDIR1 + 5 },
+    { "CAL_MDIR7",   "", nullptr, 1.0f, CALP_MDIR1 + 6 },
+    { "CAL_MDIR8",   "", nullptr, 1.0f, CALP_MDIR1 + 7 },
 };
 static const uint16_t N_SCALARS = sizeof(SCALARS) / sizeof(SCALARS[0]);
 
@@ -239,6 +371,10 @@ void init() {
     bool force_defaults = (stored_ver != (uint32_t)PARAM_DEFAULTS_VER);
 
     for (uint16_t i = 0; i < s_n; ++i) {
+        // CAL_* rows are a view onto g_state.cal, loaded by calibration::loadFromNVS()
+        // right after this. They have no NVS key here and MUST survive a defaults bump —
+        // wiping a mag cal because a PID default changed would be indefensible.
+        if (s_table[i].cal_id != CALP_NONE) continue;
         if (force_defaults) {
             *s_table[i].ptr = s_table[i].def;
             s_prefs.putFloat(s_table[i].nvskey, s_table[i].def);
@@ -250,8 +386,12 @@ void init() {
     s_prefs.end();
 
     s_defaults_were_forced = force_defaults;   // reported once the MAVLink link is up
-    // ATUNE is a momentary trigger, not a persisted setting.
+    // ATUNE and MAG_ALIGN are momentary triggers, not persisted settings.
     g_params.atune = 0.0f;
+    g_params.mag_align = 0.0f;
+    // Always report THIS build's schema version, whatever a stored value or an imported
+    // backup says — it describes the firmware, not the configuration.
+    g_params.param_ver = (float)PARAM_DEFAULTS_VER;
 }
 
 bool defaultsWereReset() { return s_defaults_were_forced; }
@@ -259,6 +399,10 @@ bool defaultsWereReset() { return s_defaults_were_forced; }
 void resetAllToDefaults() {
     s_prefs.begin(NVS_NS_PARAMS, false);
     for (uint16_t i = 0; i < s_n; ++i) {
+        // Calibration is deliberately NOT reset here — the caller
+        // (MAV_CMD_PREFLIGHT_STORAGE param1=2) resets motor directions itself, and
+        // discarding accel/mag/level cal would silently ground the vehicle.
+        if (s_table[i].cal_id != CALP_NONE) continue;
         *s_table[i].ptr = s_table[i].def;
         s_prefs.putFloat(s_table[i].nvskey, s_table[i].def);
     }
@@ -273,7 +417,8 @@ bool getByIndex(uint16_t i, char* name_out, float& value_out) {
     if (i >= s_n) return false;
     strncpy(name_out, s_table[i].name, 16);
     name_out[16] = '\0';
-    value_out = *s_table[i].ptr;
+    value_out = (s_table[i].cal_id != CALP_NONE) ? calGet(s_table[i].cal_id)
+                                                 : *s_table[i].ptr;
     return true;
 }
 
@@ -287,13 +432,17 @@ int indexOf(const char* name) {
 bool getByName(const char* name, float& value_out) {
     int i = indexOf(name);
     if (i < 0) return false;
-    value_out = *s_table[i].ptr;
+    value_out = (s_table[i].cal_id != CALP_NONE) ? calGet(s_table[i].cal_id)
+                                                 : *s_table[i].ptr;
     return true;
 }
 
 bool set(const char* name, float value) {
     int i = indexOf(name);
     if (i < 0) return false;
+    // CAL_* rows write through to g_state.cal and are persisted to NVS_NS_CAL by the
+    // comms task; they own no key in NVS_NS_PARAMS.
+    if (s_table[i].cal_id != CALP_NONE) return calSet(s_table[i].cal_id, value);
     *s_table[i].ptr = value;
     s_prefs.begin(NVS_NS_PARAMS, false);
     s_prefs.putFloat(s_table[i].nvskey, value);
@@ -305,6 +454,7 @@ bool saveAll() {
     s_prefs.begin(NVS_NS_PARAMS, false);
     bool ok = true;
     for (uint16_t i = 0; i < s_n; ++i) {
+        if (s_table[i].cal_id != CALP_NONE) continue;   // lives in NVS_NS_CAL
         // NVS is only 0x5000 (5 pages) for ~191 entries plus the calibration namespace.
         // putFloat returns 0 on a failed write; without this check a full/worn NVS would
         // fail silently and the user would think their tuning was saved.

@@ -11,6 +11,9 @@
 #include "config.h"
 #include "state_types.h"
 #include "comms/params.h"
+#include "comms/mavlink_bridge.h"   // MAV_SEVERITY_* for the notices below
+#include "comms/mav_stream.h"       // queueStatusText: Core-1-safe alignment notices
+#include "control/yaw_ref.h"
 #include "drivers/bno085.h"
 #include "drivers/bar30.h"
 #include "drivers/analog_mon.h"
@@ -80,6 +83,39 @@ void Task_SensorRead(void* pv) {
         float gy = imu.gyro_y - gyro_off.y;
         float gz = imu.gyro_z - gyro_off.z;
 
+        // --- One-shot magnetic yaw reference (MAG_YAW_REF) ---
+        // Runs BEFORE the mtx_sensors lock on purpose: yaw_ref::update() takes mtx_cal
+        // and mtx_control, and nesting those inside mtx_sensors is how you build a
+        // lock-order deadlock. It only needs this cycle's local `imu` sample anyway.
+        //
+        // MAG_ALIGN is a momentary re-trigger. Honour it only while DISARMED — dropping
+        // the offset mid-dive would step the heading-hold target and swing the vehicle.
+        if (g_params.mag_align >= 0.5f) {
+            bool armed_now = false;
+            { StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
+              if (lk.ok()) armed_now = g_state.control.armed; }
+            if (armed_now) {
+                mav_stream::queueStatusText(MAV_SEVERITY_WARNING,
+                                            "MAG_ALIGN refused: disarm first");
+            } else {
+                yaw_ref::reset();
+            }
+            g_params.mag_align = 0.0f;      // momentary: consume the trigger either way
+        }
+        yaw_ref::update(imu.mag_x, imu.mag_y, imu.mag_z, imu.mag_accuracy,
+                        imu.roll - level_r, imu.pitch - level_p, imu.yaw,
+                        bno085::attitudeValid());
+        // One line per transition, not per cycle — including refusals, so a failed
+        // alignment is never silent (it would otherwise look like the param does nothing).
+        if (yaw_ref::takeStateChange()) {
+            yaw_ref::State st = yaw_ref::state();
+            uint8_t sev = (st == yaw_ref::State::LOCKED)   ? MAV_SEVERITY_INFO
+                        : (st == yaw_ref::State::SAMPLING) ? MAV_SEVERITY_INFO
+                                                           : MAV_SEVERITY_WARNING;
+            mav_stream::queueStatusText(sev, yaw_ref::stateText());
+        }
+        const float yaw_abs_off = yaw_ref::offset();   // 0 unless an alignment locked
+
         // --- Publish under mtx_sensors (short lock, skip cycle if contended) ---
         // The extra braces MATTER: without them the StateLock lives to the end of the
         // for-body and the mutex is held across vTaskDelayUntil() below — i.e. this task
@@ -94,7 +130,16 @@ void Task_SensorRead(void* pv) {
                 s.quat_w = imu.qw; s.quat_x = imu.qx; s.quat_y = imu.qy; s.quat_z = imu.qz;
                 // Apply AHRS mounting trim to roll/pitch. Mag/accel are published
                 // raw; their calibration is applied by the consumers that use them.
-                s.roll = imu.roll - level_r; s.pitch = imu.pitch - level_p; s.yaw = imu.yaw;
+                s.roll = imu.roll - level_r; s.pitch = imu.pitch - level_p;
+                // Yaw carries the one-shot magnetic offset (0 unless MAG_YAW_REF locked),
+                // so heading-hold, absolute TURNs, ATTITUDE and VFR_HUD all see ONE
+                // consistent yaw. Wrap here, not at each consumer.
+                {
+                    float y = imu.yaw + yaw_abs_off;
+                    while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
+                    while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
+                    s.yaw = y;
+                }
                 s.lin_accel  = { imu.lin_x, imu.lin_y, imu.lin_z };
                 s.gravity    = { imu.grav_x, imu.grav_y, imu.grav_z };
                 s.gyro       = { gx, gy, gz };

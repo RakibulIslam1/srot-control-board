@@ -195,6 +195,11 @@ static void computeDemands(const LoopIn& in, float dt,
                 roll = md.roll; pitch = md.pitch; yaw = md.yaw; thr = in.sp_throttle;
                 fwd = 0; lat = 0;
             } else {
+                // Explicit heading lock: a translate/hold leg locks the heading it started
+                // with, and a finished TURN locks the heading it was commanded to reach. A
+                // centred md.yaw then holds exactly that, so "forward 3 s" tracks straight
+                // instead of relying on whatever the attitude loop last latched.
+                if (md.yaw_lock_valid) attitude::holdYaw(md.yaw_lock);
                 attitude::stabilize(0, 0, md.yaw, in.roll, in.pitch, in.yaw, in.gx, in.gy, in.gz, dt,
                                     roll, pitch, yaw);
                 depth::setTarget(md.depth_target);

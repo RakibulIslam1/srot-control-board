@@ -17,6 +17,12 @@
 // All tunable parameters. Names in the descriptor table (params.cpp) mirror the
 // MAVLink param_id and the NVS key (≤15 chars for Preferences).
 struct Params {
+    // INFORMATIONAL ONLY. Reflects the build's PARAM_DEFAULTS_VER; forced every boot and
+    // never read back by anything, so writing it has no effect. It exists so an exported
+    // parameter file records which defaults schema it was taken from — a file saved before
+    // a bump restores onto a post-bump board fine, but you want to KNOW that is what you
+    // are doing. init() sets it after loading, so it can't be shadowed by a stored value.
+    float param_ver;
     // Stunt / pattern
     float stunt_spin_cnt;
     float stunt_rate;
@@ -101,6 +107,13 @@ struct Params {
     // Thruster-battery voltage feedforward (open-loop thrust linearisation).
     float mot_bat_v_min;    // MOT_BAT_V_MIN clamp floor (V)
     float mot_bat_v_max;    // MOT_BAT_V_MAX pack full-charge voltage (V); 0 = disabled
+
+    // One-shot magnetic yaw reference (control/yaw_ref). The mag is read ONCE at boot to
+    // zero the yaw offset, then never again — attitude stays on the mag-free 6-axis fusion
+    // so thruster currents cannot move it. Fixes the reference, not the drift.
+    float mag_yaw_ref;      // MAG_YAW_REF  0 = off (yaw relative) · 1 = align once at boot
+    float mag_decl;         // MAG_DECL     local magnetic declination (deg, E positive)
+    float mag_align;        // MAG_ALIGN    momentary: set 1 to re-align (auto-clears)
     // Runtime-configurable GPIO assignments (peripheral pins). Changing any of
     // these needs a reboot to take effect (bus pins stay compile-time for safety).
     float pin_buzzer, pin_rgb, pin_leak, pin_battvolt, pin_battcurr;

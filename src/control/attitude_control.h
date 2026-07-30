@@ -17,8 +17,17 @@ constexpr float MAX_LEAN_RAD  = 0.6f;   // ~34° stabilize lean
 constexpr float MAX_YAW_RATE  = 2.5f;   // rad/s yaw-rate command
 constexpr float MAX_ACRO_RATE = 4.0f;   // rad/s per-axis acro rate
 
-// Reset all integrators (call on (re)entry to a stabilized mode).
+// Reset all integrators (call on (re)entry to a stabilized mode). Also arms a
+// heading capture: the next centred-yaw cycle latches the current heading, so
+// heading-hold engages immediately on arm / mode entry.
 void reset();
+
+// Force the heading-hold target to an explicit absolute heading (rad) and engage the
+// hold now. Used by AUTO to LOCK the heading a translate leg started with, and to
+// settle a completed TURN on the heading that was actually commanded rather than
+// wherever the completion threshold happened to stop. A subsequent yaw stick/demand
+// still overrides this — the pilot (or a yaw command) always wins.
+void holdYaw(float yaw_rad);
 
 // STABILIZE: hold target roll/pitch angles (rad); yaw is fine rate-command when the
 // stick is active and heading-hold when centred. Inputs: pilot roll/pitch/yaw sticks

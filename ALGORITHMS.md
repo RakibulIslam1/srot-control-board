@@ -31,6 +31,47 @@ roll  = atan2(2(qy·qz + qx·qw), −qx²−qy²+qz²+qw²)
 Body rates `ω = (gx, gy, gz)` come straight from the calibrated gyro report (low latency —
 this is what the rate loop uses). On a BNO reset the last-good attitude is held for 150 ms.
 
+### One-shot magnetic yaw reference (`control/yaw_ref.cpp`)
+
+`GAME_ROTATION_VECTOR` is the **mag-free** fusion, chosen on purpose: inside a metal hull with
+eight thrusters drawing tens of amps, a 9-DOF yaw jumps the instant you throttle up, because
+motor current swamps the ~50 µT earth field. The price is a yaw with **no earth reference**.
+
+`MAG_YAW_REF = 1` recovers the reference without ever putting the mag in the loop. Once, at
+boot, disarmed and still, over ≥100 samples spanning ≥1 s:
+
+```
+# 1. hard/soft iron cal (from CAL_MAG_*)
+c = (m − mag_offset) ⊙ mag_scale
+# 2. reject implausible fields — 25..65 µT is the whole earth's surface
+if |c| ∉ [25, 65] µT: refuse
+# 3. TILT-COMPENSATE using the (mag-free, trustworthy) roll/pitch.
+#    atan2(my, mx) alone is valid only dead level: a few degrees of bow-down
+#    injects an error the same size as the one we are correcting.
+Xh = cx·cos(p) + cy·sin(r)·sin(p) − cz·cos(r)·sin(p)
+Yh = cy·cos(r) + cz·sin(r)
+heading = atan2(−Yh, Xh)
+# 4. circular mean of (heading − game_yaw), + declination
+offset = wrapPi(atan2(Σ sin Δ, Σ cos Δ) + MAG_DECL)
+```
+
+Headings are averaged as **unit vectors, not angles** — a naive mean of samples either side of
+±π lands 180° wrong. The same resultant length `R = |Σ(sin,cos)| / n` doubles as the stability
+gate (`R < cos(8°)` → refuse); `max − min` would be wrong across the wrap.
+
+`Task_SensorRead` then publishes `yaw = wrapPi(game_yaw + offset)` at the **single** point where
+yaw is written, so heading-hold, absolute `TURN`, `ATTITUDE` and `VFR_HUD` cannot disagree.
+
+**Fails safe.** Low mag accuracy, bad field magnitude or unstable samples all refuse, leaving
+`offset = 0` — i.e. exactly the pre-existing relative-yaw behaviour. Refusals are sticky (a
+retry loop would flap the reported heading); `MAG_ALIGN = 1` re-tries explicitly, and is refused
+while armed because dropping the offset mid-dive would step the heading-hold target.
+
+**What it does not fix:** drift. The 6-axis yaw still creeps ~0.5–3 °/min, so a long dive loses
+absolute accuracy. Correcting that needs a continuous mag correction — reintroducing exactly the
+motor sensitivity this design avoids. Enabling `BNO_USE_MAG` turns the mag *report* on but never
+adds the mag to the fusion.
+
 ---
 
 ## 2. Cascade attitude control (`control/attitude_control.cpp`, `control/pid.h`)
@@ -84,10 +125,39 @@ else:                                       # centred → HEADING-HOLD
     err = wrapPi(yaw_target − measured_yaw)                 # wrapped to [−π, π]
     desired_yaw_rate = clamp(err · ATC_ANG_YAW_P, ±max_yaw_rate)
 ```
-On mode entry `reset()` sets `capture_pending = true`, so the heading is captured on the
-**first centred cycle** (hold engages immediately, not only after the first nudge).
-`wrapPi` guards NaN (a NaN would spin its `while` loop → watchdog). Without a magnetometer
-the held heading (relative yaw) drifts slowly.
+On mode entry — and on the **disarmed→armed edge** — `reset()` sets `capture_pending = true`,
+so the heading is captured on the **first centred cycle** (hold engages immediately, not only
+after the first nudge). `wrapPi` guards NaN (a NaN would spin its `while` loop → watchdog).
+
+### Explicit locks — `holdYaw(yaw_rad)`
+
+Relying on "whatever the loop last latched" is correct in practice but guarantees nothing, so
+AUTO sets the target outright:
+
+```
+holdYaw(y):  yaw_target = wrapPi(y);  hold = true;  capture_pending = false
+```
+
+`movement` raises a one-shot `Demand.yaw_lock` and the control loop forwards it:
+
+- **Every translate leg** (`FWD`/`BACK`/`LEFT`/`RIGHT`, plus `HOLD`/`STOP`/`DIVE`) locks the
+  heading it started with, held through cruise *and* braking.
+- **A completed `TURN`** locks `s_target_yaw` — the heading it was *commanded* to reach.
+  Previously the hold inherited `measured_yaw` at the moment the ±0.03 rad (~1.7°) completion
+  test passed, so `TURN 90°` settled anywhere in 88.3–91.7° and then held that error; across a
+  sequence of turns it compounded.
+- **`ARC` is excluded** — it commands a yaw rate by design.
+
+A yaw stick or `TURN` always overrides the lock (the `|yaw_stick| > 0.02` branch re-latches
+every cycle), so the pilot still wins.
+
+### Yaw reference — relative by default
+
+The held heading is only as absolute as the yaw feeding it, and `GAME_ROTATION_VECTOR` yaw is
+**relative**: an arbitrary zero that drifts ~0.5–3 °/min. Heading *hold* does not care (it
+tracks a target in the same drifting frame, and drift over a 5 s leg is negligible), but
+absolute `TURN` and run-to-run repeatability do. `MAG_YAW_REF` fixes the reference with a
+one-shot magnetic alignment — see §1 and PARAMETERS.md.
 
 ---
 

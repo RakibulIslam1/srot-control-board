@@ -3,12 +3,18 @@
 //  control/movement — Jetson-offloaded motion primitives (AUTO mode).
 //
 //  One robust state machine for every high-level verb: forward / back / strafe /
-//  turn / dive / arc / style / stop / hold. Translation runs at an RPM-controlled
-//  speed (voltage-independent) for a duration, then the ESP32 BRAKES (reverse
-//  thrust scaled by the cruise speed) so distance is repeatable with no drift.
+//  turn / dive / arc / style / stop / hold. Translation cruises at an open-loop
+//  normalised thrust for a duration, then the ESP32 BRAKES (reverse thrust scaled
+//  by the cruise speed) so distance is repeatable with no drift. Run-to-run
+//  repeatability as the pack drains comes from the mixer's voltage feedforward and
+//  the slow RPM-learned thrust trim (MOT_BAT_V_MAX / THR_TRIM_EN) — NOT from an RPM
+//  setpoint; RPM left the attitude path deliberately (it oscillated).
+//
 //  Depth changes are ramped (smooth, no splash); turns are rate-limited and pick
 //  the shortest direction; style delegates to the spin controller. Heading- and
-//  depth-hold run around it (in the control loop). Every command is preemptible.
+//  depth-hold run around it (in the control loop): every translate leg LOCKS the
+//  heading it started with, and a completed turn locks the heading it was told to
+//  reach. Every command is preemptible.
 // =============================================================================
 
 #include <Arduino.h>
@@ -26,6 +32,13 @@ struct Demand {
     float roll = 0, pitch = 0;         // torque demands — used only when spin=true (STYLE)
     float depth_target = 0;            // smoothed depth setpoint (m)
     bool  spin = false;                // STYLE: apply roll/pitch/yaw directly (spin controller)
+    // One-shot heading lock. Set on the first cycle of a translate/hold leg (the heading
+    // the leg began with) and when a TURN reaches its commanded heading. The control loop
+    // forwards it to attitude::holdYaw(). Without this the hold target was whatever the
+    // attitude loop happened to be latching — correct in practice, but nothing guaranteed
+    // it, and a finished TURN settled up to ~1.7° off the heading it was asked for.
+    float yaw_lock = 0;                // absolute heading to hold (rad)
+    bool  yaw_lock_valid = false;      // true for exactly one cycle
 };
 
 // Call on entry to AUTO to latch the depth setpoint to the current depth.
