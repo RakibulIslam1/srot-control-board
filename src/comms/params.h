@@ -161,7 +161,11 @@ int  indexOf(const char* name);
 bool getByName(const char* name, float& value_out);
 
 // Set by name; updates the live field AND persists to NVS. False if unknown.
-bool set(const char* name, float value);
+// Apply a value by name. Returns true if the parameter exists and was APPLIED (it is live
+// immediately). `persisted`, if given, reports separately whether the NVS write succeeded —
+// a full or worn namespace can accept the value in RAM and silently lose it on reboot, and
+// the operator needs to be told that rather than discovering it after a power cycle.
+bool set(const char* name, float value, bool* persisted = nullptr);
 
 // Persist every parameter to NVS (used by PREFLIGHT_STORAGE). Blocking flash I/O —
 // call only from a comms/Core-0 context, never the flight loop.

@@ -154,19 +154,45 @@ srot_move(m, 6)                                      # stop / brake now
 
 ### Feedback contract (drives the ROS Move action)
 
+**Every command reaches exactly one terminal result.** That is now guaranteed; it was not before
+2026-07-30, when three separate paths could leave an action hanging forever (see the note below).
+
 - Immediately: `COMMAND_ACK(command=31000, result=MAV_RESULT_IN_PROGRESS)`.
 - While running: `COMMAND_ACK(..., IN_PROGRESS, progress=0..99)` at **~3 Hz** (`progress` = percent),
   plus live `NAMED_VALUE_FLOAT`s (below).
-- On completion: one **`COMMAND_ACK(..., MAV_RESULT_ACCEPTED, progress=100)`** → map to the action
-  *result*. A tumble/leak/over-angle safety abort disarms and ends the stream.
+- **Terminal — one of exactly these four:**
+
+| Result | Meaning | Action outcome |
+|---|---|---|
+| `ACCEPTED`, progress 100 | Completed normally | **succeed** |
+| `CANCELLED`, progress 0 | **Preempted** — a newer `SROT_MOVE` displaced this one | **abort** (expected; preemption is documented behaviour) |
+| `FAILED`, progress 0 | Could not start. In practice: the board refused AUTO because no depth sensor is fitted, so it fell back to STABILIZE | **abort** and check `STATUSTEXT` |
+| `DENIED` (immediate, no `IN_PROGRESS` first) | Rejected at dispatch — bad type code, or **any non-finite parameter** | **reject** |
+
+A tumble / leak / over-angle safety abort disarms and ends the stream.
 
 ```python
+TERMINAL = {mavutil.mavlink.MAV_RESULT_ACCEPTED,
+            mavutil.mavlink.MAV_RESULT_CANCELLED,
+            mavutil.mavlink.MAV_RESULT_FAILED,
+            mavutil.mavlink.MAV_RESULT_DENIED}
 while True:
     ack = m.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)
     if ack and ack.command == 31000:
-        if ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED: break   # done
-        # ack.progress = percent complete → publish as action feedback
+        if ack.result in TERMINAL: break          # resolve the action on ANY of these
+        # IN_PROGRESS → ack.progress = percent complete → publish as action feedback
 ```
+
+> **Do not treat `ACCEPTED` as the only exit**, which the previous version of this example did.
+> Three hang paths were fixed on 2026-07-30 and each maps to one of the rows above: a move that
+> completed during a parameter download never sent its terminal ACK at all; a **preempted** move was
+> never resolved (and preemption is the documented way to interrupt one); and a move commanded with
+> no depth sensor fitted never started, so nothing ever resolved it. Any client that only waits for
+> `ACCEPTED` will still hang on the last three rows. See `AUDIT.md` B1 / R9.
+>
+> **`DENIED` on non-finite parameters** is new and blanket: every `COMMAND_LONG` param is checked, so
+> an uninitialised or `float('nan')` field in a `Move` goal now gets a clean rejection instead of
+> being silently accepted (it previously reached the ESCs as an undefined DShot value — `AUDIT.md` R5).
 
 ---
 
@@ -216,6 +242,7 @@ are spelled out rather than left to inference.
 | Quantity | Convention | Where |
 |---|---|---|
 | **Depth (internal)** | **Positive DOWN**, metres below the surface reference. 0 = surface. | `bar30.h` `depth_m`, `MS5837::getDepth()` |
+| **Heave / throttle sign** | **Positive = UP.** `throttle +1` maps to `−1` on the vertical motors, and a positive *motor* command pushes the vehicle *down* — two negatives. Getting this backwards is not hypothetical: the depth PID had it inverted until 2026-07-30, which made the **SURFACE failsafe drive the vehicle down**. See `AUDIT.md` R1 and the worked sign chain in `ALGORITHMS.md` §4. | `mixer.cpp`, `docs/THRUSTER_MAP.md` |
 | **Depth (on the wire)** | **`VFR_HUD.alt = −depth`** → *negative* underwater, because MAVLink `alt` is an **altitude**. 3 m deep reports `alt = −3.0`. | `mav_stream.cpp` |
 | **Depth setpoint** | `SROT_MOVE` DIVE `p2` is a **positive depth in metres**, not an altitude. Clamped at ≥ 0 — you cannot command above the surface. | `movement.cpp`, `depth_control.cpp` |
 | **Heave / throttle stick** | **Positive = UP = ascend = depth decreases.** `MANUAL_CONTROL.z` is 0..1000 with **500 = neutral**, so `z > 500` ascends. | `mav_commands.cpp` |
@@ -371,3 +398,16 @@ as an integer).
 - **A parameter download wipes nothing, but a `PARAM_DEFAULTS_VER` bump wipes everything.**
   If the board comes up with `STATUSTEXT "Params reset to build defaults"`, the tuning is gone
   and needs restoring from a Bondor export — the vehicle will fly, but not as tuned.
+- **`MANUAL_CONTROL` axes are clamped at entry** to `x/y/r` ±1000 and `z` 0..1000. Out-of-range
+  values are no longer scaled through (they used to become a full-authority burst after the expo
+  curve cubed them), but they are now silently truncated rather than rejected — send in-range values.
+- **A `PARAM_SET` that cannot be persisted still applies.** You get `PARAM_VALUE` echoed back plus a
+  `STATUSTEXT "<NAME> set but NOT saved (NVS full?)"`. The value is live for this session and will be
+  gone after a reboot. A companion that writes params should watch for that message rather than
+  assuming the echo means durable.
+- **The depth loop has never been exercised closed** — the Bar30 was not fitted while it was
+  developed, which is how the inverted sign survived. Bench-verify depth hold and the SURFACE
+  failsafe before relying on `DIVE` or on the depth hold that underlies every other primitive.
+- **New disarm paths during AUTO:** the safety monitor now fails closed on a NaN gyro or NaN depth
+  (it used to pass them silently, because a comparison against NaN is false). A sensor going
+  non-finite mid-move will abort and disarm rather than continue on garbage.

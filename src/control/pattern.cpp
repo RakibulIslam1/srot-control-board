@@ -51,6 +51,17 @@ void start(float headroom_m, float entry_depth, float entry_yaw) {
 
 PatternStep step() { return s_step; }
 
+void abort() { s_step = PatternStep::IDLE; s_turn_done_deg = 0; }
+
+// Per-step wall-clock ceiling. TURN_360/HEADROOM/RETURN advanced ONLY on their goal
+// condition being met (turn accumulated, depth converged, heading converged), so any
+// condition that never converges — a current holding the vehicle off depth, a stuck
+// sensor, or simply a headroom it cannot reach — wedged the step forever, driving full
+// authority the whole time. STUNT/PATTERN are also outside the safety monitor's gate, so
+// nothing else would have stopped it. Generous on purpose: these are legitimate slow
+// manoeuvres, and the ceiling is a backstop, not a schedule.
+static const uint32_t STEP_TIMEOUT_MS = 30000;
+
 bool update(float meas_roll, float meas_pitch, float meas_yaw,
             float gx, float gy, float gz, float meas_depth,
             float dt, uint32_t now,
@@ -66,7 +77,9 @@ bool update(float meas_roll, float meas_pitch, float meas_yaw,
             depth::setTarget(s_entry_depth);
             out_thr = depth::update(0, meas_depth, dt, tgt);
             s_turn_done_deg += fabsf(gz) * dt * RAD2DEG;
-            if (s_turn_done_deg >= 360.0f) { s_step = PatternStep::HEADROOM; s_step_start = now; }
+            if (s_turn_done_deg >= 360.0f || now - s_step_start >= STEP_TIMEOUT_MS) {
+                s_step = PatternStep::HEADROOM; s_step_start = now;
+            }
             return true;
         }
         case PatternStep::HEADROOM: {
@@ -74,7 +87,8 @@ bool update(float meas_roll, float meas_pitch, float meas_yaw,
             holdAttitude(s_entry_yaw, meas_roll, meas_pitch, meas_yaw, gx, gy, gz, dt,
                          out_roll, out_pitch, out_yaw);
             out_thr = depth::update(0, meas_depth, dt, tgt);
-            if (fabsf(meas_depth - (s_entry_depth + s_headroom)) < 0.1f) {
+            if (fabsf(meas_depth - (s_entry_depth + s_headroom)) < 0.1f ||
+                now - s_step_start >= STEP_TIMEOUT_MS) {
                 s_step = PatternStep::TASK; s_step_start = now;
             }
             return true;
@@ -95,7 +109,9 @@ bool update(float meas_roll, float meas_pitch, float meas_yaw,
             out_thr = depth::update(0, meas_depth, dt, tgt);
             bool depth_ok = fabsf(meas_depth - s_entry_depth) < 0.1f;
             bool yaw_ok = fabsf(yawError(s_entry_yaw, meas_yaw)) < 0.05f;
-            if (depth_ok && yaw_ok) { s_step = PatternStep::DONE; }
+            if ((depth_ok && yaw_ok) || now - s_step_start >= STEP_TIMEOUT_MS) {
+                s_step = PatternStep::DONE;
+            }
             return true;
         }
         case PatternStep::DONE:

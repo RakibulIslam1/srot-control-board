@@ -16,6 +16,12 @@ namespace stunt {
 // Begin a spin of `target_deg` total about `axis` at `rate_dps` deg/s.
 void start(StuntAxis axis, float target_deg, float rate_dps);
 
+// Stop the spin and return to idle. Called on the ARMED->DISARMED edge: without it the
+// spin kept its accumulated angle across a disarm and resumed the remaining rotation the
+// instant you re-armed, with no new command issued (the same defect autotune/motor_tune/
+// movement had, which is why they all have abort()).
+void abort();
+
 // One step. Returns true while spinning, false once complete. Writes the three
 // torque demands (−1..1).
 bool update(float meas_roll, float meas_pitch,

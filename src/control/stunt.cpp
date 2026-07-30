@@ -24,6 +24,8 @@ void start(StuntAxis axis, float target_deg, float rate_dps) {
     attitude::reset();
 }
 
+void abort() { s_axis = StuntAxis::NONE; s_done_deg = 0; s_target_deg = 0; }
+
 bool update(float meas_roll, float meas_pitch,
             float gx, float gy, float gz, float dt,
             float& out_roll, float& out_pitch, float& out_yaw) {

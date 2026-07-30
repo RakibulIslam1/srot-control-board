@@ -32,6 +32,16 @@ static float wrapPi(float e) {
 }
 static uint32_t brakeMs(float cruise) { return (uint32_t)(g_params.move_brake_k * fabsf(cruise) * 1000.0f); }
 
+// PILOT_YAW_RATE is a GCS-editable param with no lower clamp, and it is used here as a
+// DIVISOR to normalise a deg/s rate into a -1..1 yaw demand. At 0 the division gives Inf
+// (constrain() saves it) or, when the numerator is also 0, NaN — which stabilize() reads as
+// a centred stick, so the commanded TURN/ARC silently never turns. attitude_control.cpp
+// already guards the same param the same way; this brings movement into line.
+static float pilotYawRate() {
+    float r = g_params.pilot_yaw_rate;
+    return (r > 1.0f) ? r : DEF_PILOT_YAW_RATE;
+}
+
 void enter(float cur_depth) {
     s_depth_ramp = s_depth_goal = cur_depth;
     s_type = Type::NONE; s_phase = PH_IDLE; s_running = false; s_cur_speed = 0;
@@ -133,7 +143,7 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
             d.fwd = s_uf * s_cur_speed;
             d.lat = s_ul * s_cur_speed;
             if (s_yaw_rate != 0.0f)   // ARC: turn while translating
-                d.yaw = constrain(s_yaw_rate / g_params.pilot_yaw_rate, -1.0f, 1.0f);
+                d.yaw = constrain(s_yaw_rate / pilotYawRate(), -1.0f, 1.0f);
             if (now - s_start_ms >= s_dur_ms) { s_phase = PH_BRAKE; s_start_ms = now; s_brake_ms = brakeMs(s_speed); }
             break;
         }
@@ -156,7 +166,7 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
                 d.yaw_lock = s_target_yaw;
                 d.yaw_lock_valid = true;
             } else {
-                d.yaw = constrain((err > 0 ? 1.0f : -1.0f) * s_yaw_rate / g_params.pilot_yaw_rate, -1.0f, 1.0f);
+                d.yaw = constrain((err > 0 ? 1.0f : -1.0f) * s_yaw_rate / pilotYawRate(), -1.0f, 1.0f);
             }
             break;
         }

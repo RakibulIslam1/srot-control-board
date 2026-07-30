@@ -163,14 +163,47 @@ one-shot magnetic alignment — see §1 and PARAMETERS.md.
 
 ## 4. Depth control (`control/depth_control.cpp`)
 
-A single PID on depth error drives the vertical (heave) demand. The throttle stick moves
-the *target* rather than commanding thrust directly:
+A single PID drives the vertical (heave) demand. The throttle stick moves the *target* rather
+than commanding thrust directly:
 ```
 if |stick| > 0.05:  target −= stick · MAX_CLIMB_MS · dt ;  target = max(target, 0)
-heave = PID(target, measured_depth, dt)          # DEPTH_P/I/D, out clamp ±1
+heave = PID(−target, −measured_depth, dt)        # DEPTH_P/I/D, out clamp ±1
 ```
-Entering DEPTH_HOLD latches `target = current_depth`. The mixer's throttle column is −1 on
-the vertical thrusters, so a positive depth error (need to go deeper) → downward heave.
+Entering DEPTH_HOLD latches `target = current_depth`.
+
+### The sign convention, spelled out
+
+Get this backwards and the vehicle dives when told to surface, so it is worth being explicit.
+Two facts, from `docs/THRUSTER_MAP.md`:
+
+- **Depth is positive DOWN** (metres below the surface).
+- **Heave is positive UP** — `throttle +1` maps to `−1` on M5–M8, and a *positive* command on
+  those motors pushes the vehicle *down*. Two negatives: positive throttle ascends.
+
+Error and output therefore live in **opposite frames**, which is the trap. The PID is fed
+**altitude** (`−depth`) so that error, output, integrator and derivative all share one frame.
+Worked through, with the subject stated explicitly each time — this is where the original slip
+happened, so no shorthand:
+
+```
+err = setpoint − measurement = (−target) − (−measured) = measured − target
+
+measured deeper than target (measured > target):  err > 0 → heave > 0 → ASCEND  ✔ back toward target
+measured shallower than target (measured < target): err < 0 → heave < 0 → DESCEND ✔ back toward target
+SURFACE failsafe (target = 0, measured = 3 m):    err = +3 → heave > 0 → ASCEND  ✔
+```
+
+> This was **inverted** until 2026-07-30: the loop ran `PID(target, measured_depth)`, so a
+> target deeper than the current depth produced a *positive* error and hence an *ascend*
+> command. `DEPTH_HOLD` was divergent rather than mistuned, and — much worse — the SURFACE
+> failsafe (leak / low battery / GCS loss, which sets target 0) drove the vehicle **down**.
+> It survived because the Bar30 had not been fitted, so the loop had never run closed. See
+> `AUDIT.md` R1.
+>
+> Negating the *inputs* rather than the output is a readability choice, not a correctness one —
+> for this PID the two are provably identical from zero state. Altitude is preferred so that
+> error, output, integrator and derivative share one frame, which is precisely the confusion
+> that caused the bug.
 
 ---
 
@@ -389,7 +422,9 @@ heading when `|err| < 0.03 rad` (~1.7°). `ARC` is `FWD` + a signed turn rate at
 `STYLE` delegates to the spin controller (§ stunt: N×360° roll) then re-levels. Every command has a
 **timeout** (brakes out) and is **preemptible** — a new command runs a quick brake then takes over.
 The safety monitor (tumble > `ST_ANGLE_MAX`, rate > `ST_RATE_MAX`, RPM/NaN) aborts + disarms; dives
-are intended so there is **no depth-runaway check** in AUTO. `progress()` (elapsed/duration, then
+are intended, so the depth-runaway check in AUTO guards the **setpoint** (`depth::target()`), not
+the depth the leg started at — passing the current depth made the delta identically zero and left
+AUTO with no depth protection at all (`AUDIT.md` B9). `progress()` (elapsed/duration, then
 brake tail) feeds the `COMMAND_ACK` progress stream (`MV_STATE`/`MV_PROG`/`MV_TYPE` telemetry).
 
 ---

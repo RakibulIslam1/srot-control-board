@@ -458,6 +458,10 @@ static void updateMove(const Snap& s, uint32_t now) {
     static uint32_t t_ack = 0;
     static bool     s_seen_active = false;   // the control loop confirmed it started
     static uint32_t s_track_ms = 0;
+    // Who sent the move we are tracking. Cached because ControlState's mv_src_* is
+    // OVERWRITTEN the instant a preempting command arrives — so by the time we notice the
+    // preemption, the address of the command being cancelled is already gone.
+    static uint8_t  s_src_sys = 0, s_src_comp = 0;
 
     // A new (or preempting) command started → track it, ACK immediately.
     // Track on the seq change ALONE — do not require mv_active. A short move can start
@@ -466,7 +470,26 @@ static void updateMove(const Snap& s, uint32_t now) {
     // it left s_seq at 0, so no terminal ACK was ever sent and the companion's action
     // waited forever on a result that had already happened.
     if (s.mv_seq != 0 && s.mv_seq != s_seq) {
+        // PREEMPTION: a move was still being tracked and a new one displaced it. Resolve the
+        // old one before adopting the new, or its action never gets a terminal result and
+        // hangs — the same failure as a lost completion ACK, just triggered by the
+        // documented "a new move preempts the running one" behaviour rather than by timing.
+        //
+        // Report what actually happened. If the control loop had already latched the old
+        // sequence as COMPLETE (mv_done_seq) in the same window the new command arrived, then
+        // it finished and was not cancelled — saying CANCELLED there would be a lie the
+        // companion may well act on.
+        if (s_seq != 0) {
+            const bool old_completed = (s.mv_done_seq == s_seq);
+            mavlink_message_t m;
+            mavlink_msg_command_ack_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
+                MAV_CMD_SROT_MOVE,
+                old_completed ? MAV_RESULT_ACCEPTED : MAV_RESULT_CANCELLED,
+                old_completed ? 100 : 0, 0, s_src_sys, s_src_comp);
+            mav::txReliable(m);
+        }
         s_seq = s.mv_seq; t_ack = 0; s_seen_active = false; s_track_ms = now;
+        s_src_sys = s.mv_src_sys; s_src_comp = s.mv_src_comp;
     }
     if (s_seq == 0) return;
     if (s.mv_active) s_seen_active = true;

@@ -187,7 +187,14 @@ bool update(float roll, float pitch, float yaw,
         // ---- Depth loop: relay heave by depth-error sign, hold attitude level ----
         case P_DEPTH: {
             float sig = depth - s_ref;
-            out_thr = (sig > 0) ? -A_HEAVE : A_HEAVE;
+            // Relay must drive TOWARD the reference (negative feedback) to produce the
+            // sustained limit cycle the tune measures. sig > 0 means we are DEEPER than the
+            // reference, so we need to ascend — and positive heave ascends
+            // (docs/THRUSTER_MAP.md). This was `-A_HEAVE`, i.e. it drove further away: the
+            // same sign slip as the depth PID, independently written. The result was
+            // monotonic divergence instead of an oscillation, so the phase either measured
+            // nothing usable or ran until the ST_DEPTH_DELTA guard disarmed it.
+            out_thr = (sig > 0) ? A_HEAVE : -A_HEAVE;
             out_roll  = attitude::rateAxis(0, 0, gx, dt);
             out_pitch = attitude::rateAxis(1, 0, gy, dt);
             out_yaw   = attitude::rateAxis(2, 0, gz, dt);

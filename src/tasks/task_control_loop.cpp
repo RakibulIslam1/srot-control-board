@@ -278,6 +278,13 @@ void Task_ControlLoop(void* pv) {
             motor_tune::abort();
             autotune::abort();
             movement::abort();
+            // STUNT and PATTERN had no abort(), so they kept their phase across a disarm
+            // and resumed driving thrusters on the next arm with no new command — e.g. a
+            // panic-disarm 200 deg into a 360 deg spin would finish the remaining 160 deg
+            // the instant you re-armed. Disarming does not change the GCS mode selector,
+            // so the mode-entry reset never re-fired to restart them cleanly.
+            stunt::abort();
+            pattern::abort();
             {   // drop any calibration routine (MOTOR_DETECT/MOTOR_TEST re-assert
                 // test_override every cycle, which would defeat the arm-edge clear above)
                 StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(2));
@@ -301,8 +308,15 @@ void Task_ControlLoop(void* pv) {
         // fixed 0 and AUTO's dive legs can never complete. Refuse them (with a reason) and
         // fall back to STABILIZE, which flies fine without depth. SURFACE is NOT blocked:
         // it has an open-loop ascent fallback above and is a failsafe destination.
+        //
+        // PATTERN is in this list. It was missing, and that only became harmful once PATTERN
+        // came under the safety monitor: its HEADROOM step commands entry_depth + headroom
+        // while depth reads a constant 0, so any headroom beyond ST_DEPTH_DELTA now reads as
+        // a depth runaway and DISARMS. Refusing the mode says the same thing in the right
+        // way — a message the pilot can act on instead of a disarm they have to diagnose.
         if (!in.depth_ok &&
-            (in.mode == FlightMode::DEPTH_HOLD || in.mode == FlightMode::AUTO)) {
+            (in.mode == FlightMode::DEPTH_HOLD || in.mode == FlightMode::AUTO ||
+             in.mode == FlightMode::PATTERN)) {
             static uint32_t s_last_warn = 0;
             if (millis() - s_last_warn > 3000) {
                 s_last_warn = millis();
@@ -423,25 +437,43 @@ void Task_ControlLoop(void* pv) {
         prev_autotune = at_active;
         prev_mtune = mt_active;
 
-        // Safety monitor: while a tune OR AUTO move is armed, a tumble/spin-out (and RPM/NaN)
-        // aborts the maneuver + DISARMS. The leak/battery/GCS surface-failsafe below is separate.
-        bool auto_armed = (in.mode == FlightMode::AUTO) && in.armed;
-        if ((at_active || mt_active || auto_armed) && in.armed) {
+        // Safety monitor: while any AUTOMATIC maneuver is armed, a tumble/spin-out (and
+        // RPM/NaN/depth-runaway) aborts it and DISARMS. The leak/battery/GCS
+        // surface-failsafe below is separate.
+        //
+        // STUNT and PATTERN are included. They were not, which left the two modes that
+        // drive full authority with no pilot in the loop as the ONLY automatic modes with
+        // no guard at all — a PATTERN step that never converged (a current holding the
+        // vehicle off depth, a stuck sensor) drove full heave indefinitely with nothing to
+        // stop it. They now get the same coverage as a tune or a move.
+        bool auto_armed  = (in.mode == FlightMode::AUTO)    && in.armed;
+        bool stunt_armed = (in.mode == FlightMode::STUNT)   && in.armed;
+        bool patt_armed  = (in.mode == FlightMode::PATTERN) && in.armed;
+        if ((at_active || mt_active || auto_armed || stunt_armed || patt_armed) && in.armed) {
             const char* why = nullptr;
             // Depth reference for the runaway guard. A tune must not move depth at all, so it
-            // is checked against where it started. AUTO *commands* depth, so check against the
-            // active SETPOINT instead: passing the current depth (as this did) made the delta
-            // identically zero, i.e. AUTO had no depth protection whatsoever. depth::target()
-            // is one cycle stale at 500 Hz, which is irrelevant next to ST_DEPTH_DELTA.
+            // is checked against where it started. AUTO and PATTERN *command* depth, so check
+            // against the active SETPOINT instead: passing the current depth (as this did)
+            // made the delta identically zero, i.e. AUTO had no depth protection whatsoever.
+            // depth::target() is one cycle stale at 500 Hz, irrelevant next to ST_DEPTH_DELTA.
             float d0 = (at_active || mt_active) ? at_depth0 : depth::target();
-            // A STYLE move is a commanded 360 deg roll — it passes ST_ANGLE_MAX almost at once
-            // and used to disarm itself mid-spin. Exempt only the angle guard.
-            bool spinning = auto_armed && (movement::type() == movement::Type::STYLE);
+            // Commanded rotations pass ST_ANGLE_MAX almost immediately and used to disarm
+            // themselves mid-manoeuvre. Exempt ONLY the angle guard for those: a STYLE move,
+            // and STUNT (whose whole purpose is a 360 deg rotation about one axis). The rate,
+            // depth and RPM guards still apply, and those are what catch a genuine tumble.
+            bool spinning = (auto_armed && movement::type() == movement::Type::STYLE) ||
+                            stunt_armed;
+            // STUNT owns no depth setpoint — it passes the pilot's throttle straight through
+            // and never calls depth::setTarget(), so d0 is frozen at the mode-entry depth.
+            // Checking against it would disarm mid-roll, possibly inverted, for a deliberate
+            // pilot climb. Every other guard still applies to STUNT.
+            bool depth_ref_valid = !stunt_armed;
             bool safe = safety_monitor::ok(in.roll, in.pitch, in.gx, in.gy, in.gz, in.depth, d0,
                                            mt_active ? in.rpm : nullptr, mt_active ? NUM_THRUSTERS : 0, &why,
-                                           spinning);
+                                           spinning, depth_ref_valid);
             if (!safe) {
                 autotune::abort(); motor_tune::abort(); movement::abort();
+                stunt::abort(); pattern::abort();
                 char b[64]; snprintf(b, sizeof(b), "Disarmed: %s", why ? why : "safety abort");
                 mav_stream::queueStatusText(MAV_SEVERITY_ERROR, b);   // -> GCS log + OLED
                 StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
