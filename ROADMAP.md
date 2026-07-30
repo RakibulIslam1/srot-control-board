@@ -159,6 +159,40 @@ default 0/off → unchanged until tuned; math in `ALGORITHMS.md §5`):
 > `tuning_guide.md` → `ARCHITECTURE.md`; `WIRING.md` → `HARDWARE.md`; `plan.md`/
 > `ideas_and_progress.md` → this file; `pico_thruster/` → `src/pico/`.
 
+### 2026-07-30 — Parameters never persisted: the NVS partition was too small all along
+
+From a field report: `"set but NOT saved (NVS full?)"` over USB **and** LoRa, parameters not loading,
+payload mode not changeable, thruster voltage absent. **One root cause explains most of it, and it
+predates everything in this session.** Details in [AUDIT.md](AUDIT.md) R14–R16.
+
+- **R14 (root cause) — NVS could not hold the parameter set.** `Preferences::putFloat` stores each
+  float as a **blob** (~3 NVS entries, not 1), so 227 params + calibration keys needed **~681 entries
+  against 504 available**. Writes failed once it filled: values read back as defaults, `SERVOn_ROLE`
+  would not stick, and `ESPNOW_EN`/`MOT_BAT_V_MAX` not saving left the thruster-voltage link down.
+  Fixed with a custom `partitions_hengla.csv` — NVS 20 KB → **56 KB**, 1638 usable entries, **2.41×
+  headroom** — verified by decoding the built `partitions.bin` with ESP-IDF's `gen_esp32part.py`.
+  `params::init()` now recovers an unreadable NVS (`nvs_flash_init` → erase → retry) and announces a
+  reformat as CRITICAL, since the sensor calibration shares the partition. `saveAll()`/`set()` also
+  now skip values already stored — a full rewrite of 193 params per save was churning ~579 entries of
+  garbage and driving continuous garbage collection.
+  **Correction:** the earlier diagnosis that `PARAM_DEFAULTS_VER` bumps were losing tuning was
+  incomplete. Bumps do discard params, but this was the deeper cause. The R10 "not saved" warning did
+  not create the fault — it made a long-silent one visible.
+- **R15 — on/off payload channels were unreachable over MAVLink.** `DO_SET_RELAY` maps a relay
+  *instance* to channels 9–16 only, and `DO_SET_SERVO`'s pulse was discarded for role-2 channels — so
+  a switch channel in the 1–8 range answered to **neither**. `DO_SET_SERVO` now treats the pulse as a
+  level on role-2 channels (≥1500 µs = ON), making every channel addressable by its own number.
+- **R16 — PM1 read a non-linear ADC through a linear multiplier.** Switched to
+  `analogReadMilliVolts()` (factory eFuse calibration); `PM1_VMULT` becomes the divider **ratio**,
+  with a stale-value detector so a pre-change backup cannot silently report a flat pack.
+- **Corrected mid-implementation:** the plan claimed the OLED never displayed the thruster voltage,
+  based on a declared-but-never-drawn `aux_v` field. Wrong — it reaches the display as `pm2`
+  (`PM2_SRC` defaults to 2) and the top-left box already prints it, dashing when stale. It read `--`
+  because the link was down, because `ESPNOW_EN` had not persisted. The dead field was removed rather
+  than wired up; no new readout was added because none was needed.
+- **Flashing this build needs a one-time erase** — see PARAMETERS.md. Export params **first**.
+- All six envs build.
+
 ### 2026-07-30 — Round-2 audit: 13 more defects, including an inverted depth PID
 
 Three parallel audit passes over the areas the first round had not read closely (comms/protocol,

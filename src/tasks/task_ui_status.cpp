@@ -78,7 +78,8 @@ void Task_UI_Status(void* pv) {
                 v.roll = g_state.sensors.roll; v.pitch = g_state.sensors.pitch; v.yaw = g_state.sensors.yaw;
                 v.leak = g_state.sensors.leak;
                 v.kill = g_state.sensors.kill_switch;
-                v.aux_v = g_state.sensors.aux_voltage;
+                // (No separate aux_v: the thruster-pack voltage reaches the OLED as pm2,
+                //  via PM2_SRC = 2. See the note in oled.h.)
                 v.imu_ever_valid = g_state.sensors.imu_ever_valid;
                 v.bno_resets = g_state.sensors.bno_reset_count;
                 // Bar30 health = fresh reading (its healthy() is only a boot flag, so a

@@ -9,6 +9,9 @@
 
 #include "comms/params.h"
 #include <Preferences.h>
+#include <nvs_flash.h>     // nvs_flash_init/erase — partition-growth recovery, see init()
+#include <math.h>          // NAN sentinel for the skip-if-unchanged compare
+#include <string.h>        // memcmp
 #include "config.h"
 #include "state_types.h"   // g_state.cal — backing store for the CAL_* rows
 
@@ -374,8 +377,34 @@ int pinOr(float value, int fallback, bool output) {
     return p;
 }
 
+// True when init() had to reformat NVS because it was unreadable — reported to the GCS.
+static bool s_nvs_was_reformatted = false;
+
 void init() {
     buildTable();
+
+    // Make sure NVS is actually usable before opening a namespace on it.
+    //
+    // The NVS partition was enlarged (0x5000 -> 0xE000) because the old one physically
+    // could not hold this parameter set — see partitions_hengla.csv. NVS grew INTO space
+    // that previously held otadata and the start of the app, so on the first boot after
+    // that change those pages contain non-blank, non-NVS data and nvs_flash_init() fails.
+    // Without this, every Preferences::begin() would fail for ever and no parameter could
+    // ever be saved again — the exact failure this partition change exists to fix.
+    //
+    // Also covers the ordinary NO_FREE_PAGES / NEW_VERSION_FOUND cases. A one-time
+    // `pio run -t erase` avoids reaching this path at all; this is the safety net.
+    // Erase ONLY for the two errors that mean "the contents are unusable" — not for any
+    // failure. A partition-missing or out-of-memory error is not fixed by erasing, and
+    // reacting to it by wiping would risk destroying a good calibration to no purpose.
+    {
+        esp_err_t e = nvs_flash_init();
+        if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            s_nvs_was_reformatted = (nvs_flash_init() == ESP_OK);
+        }
+    }
+
     s_prefs.begin(NVS_NS_PARAMS, false);
 
     // NVS outlives a firmware flash, and a stored value always beats its DEF_*. So a
@@ -409,6 +438,8 @@ void init() {
 }
 
 bool defaultsWereReset() { return s_defaults_were_forced; }
+
+bool nvsWasReformatted() { return s_nvs_was_reformatted; }
 
 void resetAllToDefaults() {
     s_prefs.begin(NVS_NS_PARAMS, false);
@@ -464,6 +495,17 @@ bool set(const char* name, float value, bool* persisted) {
     }
     *s_table[i].ptr = value;
     s_prefs.begin(NVS_NS_PARAMS, false);
+    // Already stored? Skip the write. Re-writing an identical value costs ~3 NVS entries of
+    // garbage for no benefit, and a GCS that re-sends the whole table would churn the
+    // partition needlessly. Persisted is still true — the value IS in flash.
+    {
+        float have = s_prefs.getFloat(s_table[i].nvskey, NAN);
+        if (memcmp(&have, &value, sizeof(float)) == 0) {
+            s_prefs.end();
+            if (persisted) *persisted = true;
+            return true;
+        }
+    }
     // Check the write, like saveAll() does. putFloat returns 0 on failure, and this NVS
     // namespace is only 0x5000 — a full or worn one would take the value in RAM, echo
     // PARAM_VALUE (so the GCS shows it accepted), then lose it on the next boot with
@@ -481,10 +523,20 @@ bool saveAll() {
     bool ok = true;
     for (uint16_t i = 0; i < s_n; ++i) {
         if (s_table[i].cal_id != CALP_NONE) continue;   // lives in NVS_NS_CAL
-        // NVS is only 0x5000 (5 pages) for ~191 entries plus the calibration namespace.
-        // putFloat returns 0 on a failed write; without this check a full/worn NVS would
-        // fail silently and the user would think their tuning was saved.
-        if (s_prefs.putFloat(s_table[i].nvskey, *s_table[i].ptr) == 0) ok = false;
+        const float want = *s_table[i].ptr;
+        // Skip values that are already stored. This used to rewrite ALL ~193 parameters on
+        // every save — and autotune, motor_tune and every GCS "Save to flash" all call it.
+        // Each Preferences float is a BLOB costing ~3 NVS entries, so a full rewrite churned
+        // ~579 entries of garbage per save and drove the partition into constant
+        // garbage-collection. Writing only what changed makes a save nearly free in the
+        // common case and is the difference between occasional GC and continuous thrash.
+        // Bit-compare, not ==, so a NaN parameter still compares equal to itself and does
+        // not get rewritten every single time.
+        float have = s_prefs.getFloat(s_table[i].nvskey, NAN);
+        if (memcmp(&have, &want, sizeof(float)) == 0) continue;
+        // putFloat returns 0 on a failed write; without this check a full/worn NVS fails
+        // silently and the user thinks their tuning was saved.
+        if (s_prefs.putFloat(s_table[i].nvskey, want) == 0) ok = false;
     }
     s_prefs.end();
     return ok;

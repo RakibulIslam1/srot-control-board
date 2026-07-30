@@ -31,14 +31,15 @@ Part of the **SROT** control-board suite:
 ## Project structure — one project, three MCU targets
 ```
 srot-control-board/
-├── platformio.ini        three envs (see below)
-├── src/                   ESP32 flight-controller firmware (Hengla)
+├── platformio.ini            three envs (see below)
+├── partitions_hengla.csv     custom partition table (56 KB NVS — see below)
+├── src/                       ESP32 flight-controller firmware (Hengla)
 │   ├── main.cpp, comms/, control/, drivers/, tasks/
-│   ├── pico/main.cpp      RP2350 thruster + RPM co-processor
-│   └── second_board/      2nd board: thruster power switch + ESP-NOW voltage TX
-├── include/               config.h, state_types.h
-├── shared/                thruster_link_proto.h · espnow_proto.h · lora_telem_proto.h
-├── lib/mavlink/           vendored MAVLink v2 (see its README)
+│   ├── pico/main.cpp          RP2350 thruster + RPM co-processor
+│   └── second_board/          2nd board: thruster power switch + ESP-NOW voltage TX
+├── include/                   config.h, state_types.h
+├── shared/                    thruster_link_proto.h · espnow_proto.h · lora_telem_proto.h
+├── lib/mavlink/               vendored MAVLink v2 (see its README)
 └── docs/ + root docs …
 ```
 
@@ -64,6 +65,11 @@ failsafe have no data and stay inert.
 > **Export your parameters before reflashing.** A plain upload preserves NVS, but a build that
 > bumps `PARAM_DEFAULTS_VER` rewrites every parameter from its default. Bondor →
 > Parameters → Export (the file also carries the `CAL_*` sensor calibration).
+
+> **This build changes the partition table** (NVS 20 KB → 56 KB — the old one physically could not
+> hold the parameter set, which is why saves were failing). Flash it once with
+> `pio run -t erase` **then** `pio run -t upload`, and re-import your parameters afterwards.
+> Full procedure and rationale: [PARAMETERS.md](PARAMETERS.md) and [AUDIT.md](AUDIT.md) R14.
 
 ## Documentation
 | Doc | What's in it |

@@ -13,13 +13,19 @@ struct View {
     bool    armed;
     uint8_t mode;
     float   depth;
+    // pm1 = electronics/SBC pack (local ADC). pm2 = THRUSTER pack, which arrives from the
+    // 2nd board over ESP-NOW when PM2_SRC = 2 (the default) — so the top-left box IS the
+    // thruster-voltage readout. It shows "--" whenever that link is stale, which is the
+    // correct behaviour: a held last value that looks live would be worse.
+    // (There used to be a separate `aux_v` field here for the same number. Nothing ever
+    //  drew it, and its presence made it look as though the thruster voltage had no display
+    //  path at all. Removed rather than left as a decoy.)
     float   pm1, pm2;
     float   roll, pitch, yaw;   // rad
     bool    cal_active;
     float   cal_progress;
     bool    leak;
     bool    kill;   // thruster kill (from 2nd board) — display only
-    float   aux_v;  // aux voltage reported by the 2nd board (ESP-NOW)
     bool    imu_ever_valid; // false only at cold start → show "--"; else hold value
     uint32_t bno_resets; // BNO085 reset count (hardware-health indicator)
     float   curr;        // battery current (A)

@@ -419,7 +419,23 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
             int ch = (int)p[0] - 1;            // channel (1-based in MAVLink)
             if (ch < 0 || ch >= PCA9685_NUM_CH) return MAV_RESULT_DENIED;
             StateLock lk(g_state.mtx_aux);
-            if (lk.ok()) { g_state.aux.servo_us[ch] = (uint16_t)p[1]; g_state.aux.dirty = true; }
+            if (!lk.ok()) return MAV_RESULT_TEMPORARILY_REJECTED;
+            // A role-2 (MOSFET/switch) channel has no pulse width — Task_UI_Status forces
+            // servo_us to 0 for it and drives it from switch_on. So writing servo_us here
+            // did nothing, and DO_SET_RELAY could not reach it either: relay INSTANCE n maps
+            // to the fixed channel PCA_RELAY_BASE_CH + n, i.e. only channels 9-16. A channel
+            // in the 1-8 range set to on/off was therefore addressable by NEITHER command.
+            //
+            // Treat the pulse width as a level for those channels: >= 1500 us = ON. That
+            // makes every channel reachable by its own channel number whatever its role,
+            // which is the intuitive thing, and leaves DO_SET_RELAY (and the joystick relay
+            // buttons that share its mapping) working exactly as before.
+            if ((int)g_params.servo_role[ch] == 2) {
+                g_state.aux.switch_on[ch] = (p[1] >= 1500.0f);
+            } else {
+                g_state.aux.servo_us[ch] = (uint16_t)p[1];
+            }
+            g_state.aux.dirty = true;
             return MAV_RESULT_ACCEPTED;
         }
 
@@ -523,6 +539,16 @@ static void onParamSet(const mavlink_message_t& msg) {
     char name[17];
     strncpy(name, ps.param_id, 16);
     name[16] = '\0';
+    // Reject non-finite values here too. dispatchCommand() guards COMMAND_LONG/INT, but
+    // PARAM_SET is a separate entry point with its own path into params::set() — and a NaN
+    // reaching it is not harmless: the skip-if-already-stored compare in set() reads an
+    // ABSENT key back as the NAN sentinel, so a NaN write would match, take the skip branch,
+    // and report persisted=true for a key that was never written at all. It would then
+    // silently revert to its compiled default on the next boot.
+    if (!isfinite(ps.param_value)) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING, "PARAM_SET rejected: non-finite value");
+        return;
+    }
     bool persisted = false;
     if (params::set(name, ps.param_value, &persisted)) {
         if (!persisted) {
