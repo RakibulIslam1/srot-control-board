@@ -224,6 +224,73 @@ switch. See `PARAMETERS.md`.
 
 ---
 
+## Thruster-voltage link (2nd board → SROT, ESP-NOW) — bring-up
+
+The thruster pack and the electronics pack are **different batteries**. The SROT board's own ADC
+(GPIO36) measures the *electronics/SBC* pack, so the thruster-pack voltage can only come from the
+board physically wired to it: the **2nd board** (`env:second-board`), which broadcasts it over
+ESP-NOW at **4 Hz**. Wire format: [`shared/espnow_proto.h`](shared/espnow_proto.h) — 6 bytes,
+magic `0x53`, `thruster_kill`, `aux_voltage`.
+
+Two features on the control board consume it, and **both are inert without it**:
+the mixer's voltage feedforward (`mixer::setBatteryVoltage()`, what makes a timed move travel the
+same distance on a full or a flat pack) and the low-thruster-battery failsafe.
+
+### Steps
+
+1. Flash the 2nd board: `pio run -e second-board -t upload -t monitor`. Its serial line should
+   read e.g. `THR 15.10 V | knob 253 deg | power ON | tx 131 fail 0` — a rising `tx` with
+   `fail 0` means it is broadcasting.
+2. **Verify the voltage against a multimeter at the pack.** `PM1_VOLT_MULT` (0.009088) is
+   inherited, and the ESP32 ADC is markedly non-linear above ~2.5 V. Every threshold below
+   depends on this being right — if the meter disagrees, scale `PM1_VOLT_MULT` by
+   `actual / reported` and reflash.
+3. On the control board, set these parameters (Bondor → Parameters). Values shown are for a
+   **4S LiPo**:
+
+| Param | Set to | Why |
+|---|---|---|
+| `ESPNOW_EN` | **1** | Starts WiFi STA + ESP-NOW. Live within ~50 ms — `Task_LoRa_SD` polls the param at 20 Hz. No reboot needed. |
+| `MOT_BAT_V_MAX` | **16.8** | 4.2 V/cell × 4 = full charge. **0 disables the feedforward entirely**, so this is the switch that turns compensation on. |
+| `MOT_BAT_V_MIN` | 13.2 *(default)* | 3.3 V/cell clamp floor, so the compensation gain cannot blow up near empty. |
+| `FS_BAT_VOLTAGE` | **13.6** | 3.4 V/cell. Above `MOT_BAT_V_MIN` on purpose — the vehicle should be surfacing before the compensation saturates at its floor. |
+| `FS_BAT_ENABLE` | 1 *(default)* | See the warning below. |
+| `PM2_SRC` | 2 *(default)* | Already routes the aux voltage to `BATTERY_STATUS` id 1. |
+
+4. Save to flash, then **re-export your `.params` backup** so the new values are captured.
+
+### Where it shows up (within ~2 s)
+
+Bondor Dive view → **Battery 2** tile (`—` until the link is up) · the OLED aux-voltage field ·
+`BATTERY_STATUS` **id 1** (id 0 is the electronics pack) · a `STATUSTEXT`
+`"Thruster pack link up (15.1 V)"`.
+
+On loss you get `"Thruster pack link LOST - voltage comp off"` within `ESPNOW_STALE_MS` (2 s),
+Battery 2 returns to `—`, and the compensation and failsafe both go inert. That is fail-safe —
+`thr_volts = 0` means "no source", never "flat battery" — but it is announced because otherwise
+the compensation you tuned around switches itself off silently.
+
+> ⚠️ **Enabling this makes the low-battery failsafe live for the first time.** `thr_volts` was
+> always 0 before the 2nd board's sender existed, so the `> 1.0 V` guard kept the whole branch
+> inert. Once real voltage arrives, the vehicle **will** auto-surface when the pack drains past
+> `FS_BAT_VOLTAGE`. It is debounced by `FS_BAT_HOLD_MS` (3 s continuous) precisely because a 4S
+> LiPo driving eight T200s sags over a volt under load and an instantaneous test would surface
+> you mid-burst. Set `FS_BAT_ENABLE = 0` if you want to fly without it while you calibrate.
+
+### Notes
+
+- Both boards must be on **`ESPNOW_CHANNEL` 1**, with WiFi power-save off (both do this natively;
+  the Arduino API cannot pin a channel without an AP association).
+- The receiver registers a plain RX callback with **no peer**, so the sender broadcasts to
+  `FF:FF:FF:FF:FF:FF`. No pairing or MAC configuration is needed.
+- `fail 0` on the 2nd board only means the MAC accepted the frame for transmission — broadcast is
+  unacknowledged, so it is **not** proof anything received it. The control board's `STATUSTEXT`
+  is the proof.
+- `ESPNOW_EN` is a one-shot latch in `Task_LoRa_SD`: setting it back to **0 does not stop the
+  radio**, that needs a reboot. Turning it on is live.
+
+---
+
 ## Standalone fallback (`THRUSTER_BACKEND = RMT`)
 With no Pico, set `THRUSTER_BACKEND = RMT` in `config.h`: the ESP32 drives DShot directly on
 its 8 thruster pins **4, 12, 13, 14, 15, 16, 17, 27** via RMT (no RPM feedback). In that mode

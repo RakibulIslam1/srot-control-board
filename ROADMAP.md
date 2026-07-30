@@ -159,6 +159,35 @@ default 0/off → unchanged until tuned; math in `ALGORITHMS.md §5`):
 > `tuning_guide.md` → `ARCHITECTURE.md`; `WIRING.md` → `HARDWARE.md`; `plan.md`/
 > `ideas_and_progress.md` → this file; `pico_thruster/` → `src/pico/`.
 
+### 2026-07-30 — Thruster-voltage link brought up; low-battery failsafe debounced (B12)
+
+The 2nd board's ESP-NOW sender works on hardware: `THR 15.10 V | knob 253 deg | power ON |
+tx 131 fail 0`. The SROT receive path was already complete (`espnow_link` → `aux_voltage` →
+`PM2_SRC=2` → `BATTERY_STATUS` id 1 → Bondor "Battery 2", plus the OLED and `in.thr_volts`), so
+bring-up is configuration: `ESPNOW_EN=1`, `MOT_BAT_V_MAX=16.8`, `FS_BAT_VOLTAGE=13.6` for the 4S
+LiPo. Documented as a procedure in `HARDWARE.md`.
+
+- **B12 (high) — the low-battery failsafe had no debounce.** It tested the **raw** 4 Hz voltage
+  every 500 Hz cycle, so one low sample switched the vehicle to SURFACE. A 4S pack driving eight
+  T200s sags over a volt under load, so a full-throttle burst against a 13.6 V threshold would
+  have surfaced the vehicle mid-manoeuvre on a healthy pack — and the feature would have looked
+  broken on its first dive. Now requires 3 s continuous (`FS_BAT_HOLD_MS`), any sample above
+  resetting the timer. Leak and GCS-loss stay instantaneous: neither is analogue.
+  This had never fired because `thr_volts` was always 0 with no sender, so the defect and its
+  trigger arrived in the same change.
+- The battery `STATUSTEXT` now **quotes the voltage** — without a number a spurious trip cannot be
+  told apart from a flat pack or a miscalibrated divider.
+- **ESP-NOW link up/lost notice** (`task_lora_sd.cpp`), same edge-triggered pattern as the IMU and
+  Pico-link notices. Link loss degrades safely but *silently*: the voltage compensation stops and
+  the failsafe goes inert again, and the pilot had no way to know the compensation they tuned
+  around had switched itself off.
+- Docs: `HARDWARE.md` bring-up section (incl. that `fail 0` on the sender only means the MAC
+  accepted the frame — broadcast is unacknowledged, so the receiver's STATUSTEXT is the only
+  proof), `PARAMETERS.md` `FS_BAT_*` note, `docs/T200_PROFILE.md` worked 4S example, `AUDIT.md`
+  B12.
+- **Calibrate the divider before trusting any of it:** the 2nd board's `PM1_VOLT_MULT` is
+  inherited and the ESP32 ADC is non-linear above ~2.5 V. Check against a multimeter at the pack.
+
 ### 2026-07-30 — Firmware named Hengla; full audit (9 defects fixed); 2nd-board env
 
 **Naming.** The board is **SROT**; the firmware is now **HENGLA**. Minimal by intent: `config.h`

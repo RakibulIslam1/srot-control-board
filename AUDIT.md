@@ -21,6 +21,7 @@ Scope read: `src/comms/`, `src/control/`, `src/drivers/`, `src/tasks/`, `src/pic
 | B9 | AUTO depth-runaway guard is a permanent no-op | Medium | Fixed |
 | B10 | Dead ArduSub spoof macros that the config still documented | Cosmetic | Removed |
 | B11 | Comments contradicting the code | Cosmetic | Corrected |
+| B12 | Low-battery failsafe had no debounce against pack sag | **High** — spurious mid-dive surface | Fixed |
 
 ---
 
@@ -166,6 +167,44 @@ vehicle held station, was never caught.
 "the vehicle is this far from where it was told to be". A tune still checks against where it
 started, which is correct for a manoeuvre that must not change depth at all.
 
+## B12 — The low-battery failsafe had no debounce
+
+**High**, and found while bringing the 2nd board's ESP-NOW voltage link up — i.e. found at
+exactly the moment it became reachable.
+
+The branch was:
+
+```cpp
+if (fs_bat_enable > 0 && in.thr_volts > 1.0f && in.thr_volts < fs_bat_voltage) → SURFACE
+```
+
+evaluated every 500 Hz cycle against the **raw** published voltage, not the mixer's 0.5 Hz
+filtered copy. A single low sample switched the vehicle to `SURFACE`.
+
+A 4S LiPo driving eight T200s sags well over a volt under load. With a 15.1 V resting pack and a
+13.6 V threshold, a full-throttle burst later in the dive is entirely capable of dipping below the
+line for a moment — surfacing the vehicle mid-manoeuvre on a pack that is completely healthy. The
+feature would have looked broken on its first real dive.
+
+This had never fired because `in.thr_volts` was always 0 (no sender existed, so the `> 1.0f` guard
+made the whole branch inert). It went live for the first time the moment the 2nd board started
+broadcasting — so the defect and its trigger arrived together.
+
+**Fix.** The voltage must stay below `FS_BAT_VOLTAGE` continuously for `FS_BAT_HOLD_MS` (3 s,
+`config.h`); any sample above resets the timer. The 2nd board already averages its ADC over 500 ms
+and sends at 4 Hz, so 3 s is ~12 consecutive low readings — far too long for a transient, still
+early enough that a genuinely flat pack surfaces with reserve.
+
+Leak and GCS-loss are deliberately **not** debounced: neither is an analogue measurement and
+neither has a sag equivalent.
+
+The `STATUSTEXT` now also quotes the measured voltage
+(`"Failsafe: surfacing (low thruster battery 13.4 V)"`). Without a number, a spurious trip is
+undiagnosable after the fact — you cannot distinguish a flat pack from a load sag from a
+miscalibrated divider.
+
+`src/tasks/task_control_loop.cpp`, `include/config.h`
+
 ## B10 — Dead ArduSub spoof, still documented as live
 
 `APM_COMPAT_VER_MAJOR/MINOR/PATCH/PACKED` and `APM_COMPAT_BANNER` were referenced **nowhere**
@@ -203,6 +242,12 @@ All corrected.
   over a LoRa link, and it is cheap to add. See `ROADMAP.md`.
 - **`THR_POLE_PAIRS` is compile-time.** Correct for a T200 (7); a different motor needs a
   rebuild.
+- **A leak that starts while already in `SURFACE` mode emits no failsafe `STATUSTEXT`.** The whole
+  failsafe block sits inside `if (in.mode != FlightMode::SURFACE)` — pre-existing, and mostly
+  moot since the mode-forcing would be a no-op anyway. Not a blind spot in practice: `HEARTBEAT`
+  forces `MAV_STATE_CRITICAL` while `leak` is true, a `LEAK` `NAMED_VALUE_FLOAT` streams every
+  500 ms, and the OLED and buzzer react to raw sensor state — none of them mode-gated. Only the
+  one-shot CRITICAL line is lost. Worth tidying when that block is next touched.
 - **Single IMU, single baro, no redundancy.** Inherent to the hardware, not a code defect, but
   it bounds how much any of the above can protect you. See `docs/VS_ARDUSUB.md`.
 

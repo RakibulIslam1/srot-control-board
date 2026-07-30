@@ -486,6 +486,15 @@
 // surface the vehicle without a depth loop, gentle enough not to breach hard.
 #define DEPTH_LOST_ASCENT       0.35f       // 0..1 heave command
 
+// Low-thruster-battery failsafe hold time. The voltage must stay below FS_BAT_VOLTAGE
+// continuously for this long before surfacing; any sample above it resets the timer.
+// A 4S LiPo driving eight T200s sags well over a volt under load, so an instantaneous
+// test would surface the vehicle mid-burst on a perfectly healthy pack. The 2nd board
+// already averages its ADC over 500 ms and sends at 4 Hz, so 3 s is ~12 consecutive low
+// readings — far too long for a transient, still early enough that a genuinely flat pack
+// surfaces with reserve. Leak and GCS-loss are NOT debounced: neither is analogue.
+#define FS_BAT_HOLD_MS          3000
+
 // Failsafe
 #define GCS_FAILSAFE_MS         5000        // no GCS HEARTBEAT for this long → failsafe
                                             // (5 s tolerates a few missed beats over lossy LoRa;

@@ -183,10 +183,26 @@ success *and* refusal — is announced over `STATUSTEXT`.
 |---|---|---|
 | `FS_GCS_ENABLE` **[R]** | 1 | GCS-loss failsafe → controlled SURFACE ascent. |
 | `FS_BAT_ENABLE` **[R]** | 1 | Low-battery failsafe enable (PM1). |
-| `FS_BAT_VOLTAGE` **[R]** | 13.2 | PM1 low-battery threshold (V). |
+| `FS_BAT_VOLTAGE` **[R]** | 13.2 | **THRUSTER**-pack low-battery threshold (V) — see the note below. For a 4S LiPo use **13.6** (3.4 V/cell). |
 | `ARMING_CHECK` **[R]** | 1 | 0 = skip pre-arm checks, 1 = enforce. |
 | `ATUNE` **[R]** | 0 | Momentary trigger: set 1 → relay auto-tune of all PID loops (auto-resets to 0; NVS save deferred to the comms core). |
-| `ESPNOW_EN` **[R]** | 0 | Start the WiFi/ESP-NOW 2nd-board link (thruster-kill + aux voltage). |
+| `ESPNOW_EN` **[R]** | 0 | Start the WiFi/ESP-NOW 2nd-board link (thruster-kill + thruster-pack voltage). Live within ~50 ms; **setting it back to 0 does not stop the radio** — that needs a reboot. |
+
+> **The battery failsafe watches the THRUSTER pack, not the electronics pack**, and it is
+> **inert until the ESP-NOW link from the 2nd board delivers a voltage** (`thr_volts` is 0
+> otherwise, and 0 is treated as "no source", never "flat battery"). So on a vehicle without
+> `env:second-board` flashed and `ESPNOW_EN = 1`, `FS_BAT_*` does nothing at all — and the first
+> time you enable that link, this failsafe becomes live for the first time.
+>
+> It is **debounced**: the voltage must stay below `FS_BAT_VOLTAGE` continuously for
+> `FS_BAT_HOLD_MS` (3 s, `config.h`) before surfacing, and any sample above resets the timer. A
+> 4S LiPo driving eight T200s sags well over a volt under load, so an instantaneous test would
+> surface the vehicle mid-burst on a healthy pack. Leak and GCS-loss are **not** debounced —
+> neither is analogue. A battery trip quotes the measured voltage in its `STATUSTEXT`
+> (`"Failsafe: surfacing (low thruster battery 13.4 V)"`) so a spurious trip can be told apart
+> from a flat pack or a miscalibrated divider.
+>
+> Full bring-up procedure: [HARDWARE.md](HARDWARE.md) § Thruster-voltage link.
 
 ### Motor reverse (Bondor Motors page reverse toggle)
 | Param | Default | What it does |
