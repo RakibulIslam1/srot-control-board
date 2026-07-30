@@ -13,27 +13,39 @@
 #   started checking putFloat()'s return. Symptoms were params not persisting, a
 #   SERVOn_ROLE change not sticking, and values reading back as defaults after a reboot.
 #
-# NVS is now 0xE000 (56 KB = 14 pages) -> (14 - 1) x 126 = 1638 usable entries, i.e. ~2.4x
-# what the current table needs, with room for it to grow.
+# ============================ READ THIS BEFORE EDITING ============================
+# app0 MUST START AT 0x10000.
 #
-# spiffs shrinks 896 KB -> 768 KB to fund this. Nothing in the firmware uses SPIFFS (logging
-# goes to the SD card), so the space was idle.
+# PlatformIO does NOT read the app offset from this file. platform-espressif32's
+# builder/main.py does:
+#     ESP32_APP_OFFSET = board.get("upload.offset_address", "0x10000")
+# so it flashes firmware.bin to a HARDCODED 0x10000 regardless of what this table says.
+# An earlier version of this file moved app0 to 0x20000 to make room for a bigger NVS
+# below it. The result: every upload wrote the app to 0x10000 while the bootloader looked
+# for it at 0x20000, found erased flash, and the board did nothing at all — no display, no
+# serial, and reflashing could never fix it because each flash repeated the same mistake.
 #
-# NVS deliberately stays at offset 0x9000 so this is a GROWTH, not a move. But the space it
-# grew into previously held otadata and the start of the app, so those pages are not blank
-# and NVS cannot read them: params::init() runs nvs_flash_init() and reformats on any error.
-# A one-time `pio run -t erase` before the first upload avoids the question entirely.
+# So NVS is placed AFTER the app instead. Partition order is free — nvs_flash_init() finds
+# the partition by label, not by position — and this keeps app0 exactly where PlatformIO
+# will put the binary. It also buys far more room than squeezing NVS in below the app ever
+# could (that space is capped at 28 KB by the 0x9000 table boundary).
+# ==================================================================================
 #
-# app0 must start on a 64 KB boundary (an ESP32 requirement for app partitions), which is
-# why it moves 0x10000 -> 0x20000 and leaves a small gap after otadata. Current app usage is
-# ~917 KB against the 3 MB reserved here, so there is ample headroom.
+# NVS is 0x20000 (128 KB = 32 pages) -> (32 - 1) x 126 = 3906 usable entries, ~5.7x what
+# the current table needs. One page is always reserved for garbage collection.
 #
-# CHANGING THIS FILE MOVES THE APP: bootloader, partition table and firmware must all be
-# rewritten. A normal `pio run -t upload` does write all three.
+# The 0x9000-0x10000 region is intentionally unallocated: nothing may live there, because
+# anything placed below the app would push the app off 0x10000. A gap is legal (the ESP-IDF
+# tool only rejects overlaps) and 28 KB is a cheap price for a bootable board.
+#
+# spiffs shrinks 896 KB -> 704 KB to fund the NVS growth. Nothing in the firmware uses
+# SPIFFS (logging goes to the SD card), so that space was idle.
+#
+# Changing this file still rewrites bootloader + partition table + app; `pio run -t upload`
+# does all three. Existing NVS contents do not survive a move: export parameters first.
 #
 # Name,     Type, SubType,  Offset,   Size,     Flags
-nvs,        data, nvs,      0x9000,   0xE000,
-otadata,    data, ota,      0x17000,  0x2000,
-app0,       app,  factory,  0x20000,  0x300000,
-spiffs,     data, spiffs,   0x320000, 0xC0000,
+app0,       app,  factory,  0x10000,  0x300000,
+nvs,        data, nvs,      0x310000, 0x20000,
+spiffs,     data, spiffs,   0x330000, 0xB0000,
 coredump,   data, coredump, 0x3E0000, 0x10000,

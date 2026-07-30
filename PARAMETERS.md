@@ -25,7 +25,7 @@ Legend: **[R]** real · **[i]** informational/inert (defined, not read by the co
 
 ## ⚠ Flashing this build: erase once, then restore
 
-This build **enlarges the NVS partition** (20 KB → 56 KB). The old one physically could not hold the
+This build **enlarges the NVS partition** (20 KB → 128 KB, relocated after the app). The old one physically could not hold the
 parameter set — `Preferences` stores each float as a *blob* costing ~3 NVS entries, so 227 params and
 calibration keys needed ~681 entries against 504 available, and writes failed once it filled. That is
 what produced `"<NAME> set but NOT saved (NVS full?)"`, parameters reading back as defaults, and
