@@ -455,21 +455,52 @@ void Task_ControlLoop(void* pv) {
         mixer::setBatteryVoltage(in.thr_volts, dt);
 
         // --- Failsafes → controlled SURFACE ascent. ---
+        // Declared OUTSIDE the mode guard so it can be cleared while already surfacing —
+        // see the else branch at the bottom.
+        static uint32_t s_bat_low_since = 0;
         if (in.mode != FlightMode::SURFACE) {
             bool fs = false;
             const char* fs_why = nullptr;
-            if (g_params.leak_en > 0 && in.leak) { fs = true; fs_why = "leak"; }
+            // Kept in lockstep with fs_why: every branch that assigns fs_why also assigns
+            // this, so a later branch overwriting the reason cannot leave a stale flag and
+            // print another failsafe's reason with a voltage stapled to it.
+            bool fs_is_bat = false;
+            if (g_params.leak_en > 0 && in.leak) { fs = true; fs_why = "leak"; fs_is_bat = false; }
             // Watch the THRUSTER battery, not the electronics one. This used to test
             // in.pm1 (the local ADC = SBC/electronics pack) against FS_BAT_VOLTAGE, which
             // is clearly a thruster-pack threshold — so it was guarding the wrong battery.
             // in.thr_volts is 0 when no fresh thruster-voltage source exists, and the
             // > 1.0 test then makes this inert rather than surfacing on a 0 V reading.
-            if (g_params.fs_bat_enable  > 0 && in.thr_volts > 1.0f &&
-                in.thr_volts < g_params.fs_bat_voltage) {
-                fs = true; fs_why = "low thruster battery";
+            // DEBOUNCED, unlike the others. A 4S LiPo driving eight T200s sags well over a
+            // volt under load, so an instantaneous test would surface the vehicle mid-burst on
+            // a pack that is actually fine. Require the voltage to stay low continuously for
+            // FS_BAT_HOLD_MS; any sample above the threshold resets the timer. The 2nd board
+            // already averages its ADC over 500 ms and sends at 4 Hz, so 3 s is ~12
+            // consecutive low readings — far too long for a transient, still early enough that
+            // a genuinely flat pack surfaces with reserve to spare.
+            //
+            // Note this ALSO makes the failsafe real for the first time: thr_volts was 0 until
+            // the 2nd board's ESP-NOW sender existed, so the > 1.0 guard kept the whole branch
+            // inert. 0 still means "no source", never "flat battery".
+            //
+            // The timer only runs while ARMED. The failsafe only ACTS when armed, so
+            // counting idle bench time would let the 3 s window expire long before anyone
+            // armed — and then surface on the very first armed cycle with zero debounce
+            // actually observed under load. That is the same false trip this exists to
+            // prevent, just relocated to the arm boundary.
+            const float bat_v = in.thr_volts;
+            if (in.armed && g_params.fs_bat_enable > 0 &&
+                bat_v > 1.0f && bat_v < g_params.fs_bat_voltage) {
+                uint32_t nb = millis();
+                if (s_bat_low_since == 0) s_bat_low_since = nb;
+                if (nb - s_bat_low_since >= FS_BAT_HOLD_MS) {
+                    fs = true; fs_why = "low thruster battery"; fs_is_bat = true;
+                }
+            } else {
+                s_bat_low_since = 0;
             }
             if (g_params.fs_gcs_enable  > 0 && in.armed && !mav_commands::gcsLinkOk()) {
-                fs = true; fs_why = "GCS link lost";
+                fs = true; fs_why = "GCS link lost"; fs_is_bat = false;
             }
             // Edge-trigger latch: this branch re-runs every loop while the fault holds,
             // so announce only when the reason changes, and re-arm once it clears.
@@ -481,12 +512,28 @@ void Task_ControlLoop(void* pv) {
                 in.mode = FlightMode::SURFACE;
                 if (fs_why != s_fs_last) {           // was silent: it just started surfacing
                     s_fs_last = fs_why;
-                    char b[64]; snprintf(b, sizeof(b), "Failsafe: surfacing (%s)", fs_why ? fs_why : "?");
+                    // 64, not more: queueStatusText copies into a 64-byte queue slot, so a
+                    // larger local would imply headroom that does not exist. Worst case here
+                    // is 49 chars.
+                    char b[64];
+                    // Quote the voltage on a battery trip. Without the number a spurious
+                    // surface is impossible to diagnose after the fact — you cannot tell a
+                    // flat pack from a load sag from a miscalibrated divider.
+                    if (fs_is_bat)
+                        snprintf(b, sizeof(b), "Failsafe: surfacing (%s %.1f V)", fs_why, bat_v);
+                    else
+                        snprintf(b, sizeof(b), "Failsafe: surfacing (%s)", fs_why ? fs_why : "?");
                     mav_stream::queueStatusText(MAV_SEVERITY_CRITICAL, b);
                 }
             } else if (!fs) {
                 s_fs_last = nullptr;
             }
+        } else {
+            // Already surfacing, so everything above is skipped and the debounce timer would
+            // freeze at an already-expired value — leaving SURFACE with the pack still low
+            // would then re-trip on the very next cycle with no fresh window observed. Clear
+            // it so any resumed flight mode gets a full FS_BAT_HOLD_MS again.
+            s_bat_low_since = 0;
         }
 
         // --- In-flight IMU health: WARN and degrade, never disarm. ---

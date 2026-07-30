@@ -105,7 +105,31 @@ instantly and the trim cleans up the residue.
 - **`MOT_BAT_V_MAX` defaults to 0 (compensation off)** and needs the **thruster** pack voltage,
   which arrives from the 2nd board over **ESP-NOW** (`PM2`, `PM2_SRC=2`) — *not* the local ADC,
   which measures the SBC/electronics battery. Until that link is running the compensation stays
-  inert. Set `MOT_BAT_V_MAX` to the pack's full-charge voltage (4S LiPo = 16.8 V).
+  inert.
+
+### Worked example — 4S LiPo, 8× T200
+
+| Param | Value | Reasoning |
+|---|---|---|
+| `MOT_BAT_V_MAX` | **16.8** | 4.2 V/cell × 4 = full charge. This is the switch: 0 = compensation off. |
+| `MOT_BAT_V_MIN` | **13.2** | 3.3 V/cell. Clamp floor, so `1/v` cannot blow up near empty. |
+| `FS_BAT_VOLTAGE` | **13.6** | 3.4 V/cell. Deliberately **above** `MOT_BAT_V_MIN` — you want to be surfacing before the feedforward saturates at its floor. |
+| `ESPNOW_EN` | **1** | Without it none of the above has any data. |
+
+At 16 V the T200 makes ~3.71 kgf at a duty that yields ~6.7 kgf at 20 V, so the feedforward is
+correcting a genuinely large effect — a pack drifting 16.8 → 13.6 V changes thrust at fixed duty
+by roughly a third. That is the difference between "5 s at 20 %" travelling the same distance on
+dive one and dive ten.
+
+**Enabling `ESPNOW_EN` also makes the low-battery failsafe live for the first time** (it reads
+`thr_volts`, which was always 0 before). It is debounced 3 s (`FS_BAT_HOLD_MS`) because a 4S pack
+driving eight T200s sags over a volt under load and an instantaneous test would surface you
+mid-burst. Full procedure: [../HARDWARE.md](../HARDWARE.md) § Thruster-voltage link.
+
+**Calibrate the divider first.** The 2nd board's `PM1_VOLT_MULT` (0.009088) is inherited and the
+ESP32 ADC is non-linear above ~2.5 V. Every number in the table above is meaningless if the
+reported voltage is off — check it against a multimeter at the pack and scale by
+`actual / reported`.
 
 ## Low-speed resolution — firmware floor vs ESC startup power
 

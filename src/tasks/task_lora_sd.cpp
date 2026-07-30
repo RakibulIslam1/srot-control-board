@@ -9,6 +9,7 @@
 #include <SPI.h>
 #include "comms/params.h"
 #include "comms/mavlink_bridge.h"
+#include "comms/mav_stream.h"      // queueStatusText — thruster-pack link notices
 #include "comms/mav_commands.h"
 #include "drivers/lora_mission.h"
 #include "drivers/sd_log.h"
@@ -132,17 +133,32 @@ void Task_LoRa_SD(void* pv) {
         if (espnow_started) {
             bool kill, fresh; float aux_v;
             espnow_link::poll(kill, aux_v, fresh);
-            StateLock lk(g_state.mtx_sensors, pdMS_TO_TICKS(2));
-            if (lk.ok()) {
-                g_state.sensors.kill_switch = kill;
-                // Publish freshness, not just the value. This is the THRUSTER battery and
-                // it feeds the low-battery failsafe (and, later, motor voltage
-                // compensation) — consuming a silently-held stale reading would be unsafe.
-                if (fresh) {
-                    g_state.sensors.aux_voltage  = aux_v;
-                    g_state.sensors.aux_stamp_ms = millis();
+            {
+                StateLock lk(g_state.mtx_sensors, pdMS_TO_TICKS(2));
+                if (lk.ok()) {
+                    g_state.sensors.kill_switch = kill;
+                    // Publish freshness, not just the value. This is the THRUSTER battery and
+                    // it feeds the low-battery failsafe and the mixer's voltage compensation —
+                    // consuming a silently-held stale reading would be unsafe.
+                    if (fresh) {
+                        g_state.sensors.aux_voltage  = aux_v;
+                        g_state.sensors.aux_stamp_ms = millis();
+                    }
+                    g_state.sensors.aux_valid = fresh;
                 }
-                g_state.sensors.aux_valid = fresh;
+            }
+            // Announce the link edges. Losing this link degrades SILENTLY and safely: the
+            // mixer's voltage compensation stops and the low-battery failsafe goes inert
+            // again, so nothing misbehaves — but the pilot has no way to know the
+            // compensation they tuned around has switched itself off. Same edge-triggered
+            // pattern as the IMU lost/recovered and Pico link-flap notices.
+            static bool s_thr_link_prev = false;
+            if (fresh != s_thr_link_prev) {
+                s_thr_link_prev = fresh;
+                char b[64];
+                if (fresh) snprintf(b, sizeof(b), "Thruster pack link up (%.1f V)", aux_v);
+                else       snprintf(b, sizeof(b), "Thruster pack link LOST - voltage comp off");
+                mav_stream::queueStatusText(fresh ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING, b);
             }
         }
 
