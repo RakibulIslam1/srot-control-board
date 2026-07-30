@@ -234,6 +234,23 @@ static uint8_t s_cmd_src_sys = 0, s_cmd_src_comp = 0;
 // --- command dispatch --------------------------------------------------------
 // p[0..6] = param1..param7.
 static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
+    // Reject non-finite parameters up front, for EVERY command. This is the single
+    // choke point where GCS/companion floats enter the vehicle, and Arduino's
+    // constrain() cannot stop a NaN: it is built from < and >, both of which are false
+    // against NaN, so `constrain(NaN, -1, 1)` returns NaN unchanged. A NaN that reached
+    // DO_MOTOR_TEST's throttle propagated all the way to `(int16_t)NaN` in
+    // mixer::oneToDshot() — an undefined cast producing an arbitrary DShot value on an
+    // armed thruster. Guarding here fixes the whole class rather than one command.
+    //
+    // Safe to apply blanket: no command this firmware implements uses NaN as a
+    // meaningful "leave unchanged" sentinel (some ArduPilot NAV/REPOSITION commands do,
+    // and none of those are implemented here). Revisit if one is ever added.
+    for (int i = 0; i < 7; ++i) {
+        if (!isfinite(p[i])) {
+            mav_stream::sendStatusText(MAV_SEVERITY_WARNING, "Command rejected: non-finite param");
+            return MAV_RESULT_DENIED;
+        }
+    }
     switch (command) {
         case MAV_CMD_COMPONENT_ARM_DISARM: {
             bool want = p[0] > 0.5f;
@@ -348,9 +365,16 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
 
         case MAV_CMD_ACCELCAL_VEHICLE_POS: {
             int pos = (int)p[0];                 // 1..6 (LEVEL..BACK)
+            if (pos < 1 || pos > 6) return MAV_RESULT_DENIED;
+            bool applied = false;
             { StateLock lk(g_state.mtx_cal);
-              if (lk.ok() && pos >= 1 && pos <= 6) g_state.cal.step = (uint8_t)(pos - 1); }
-            if (pos >= 1 && pos < 6) sendAccelPrompt(pos + 1);   // prompt next face
+              if (lk.ok()) { g_state.cal.step = (uint8_t)(pos - 1); applied = true; } }
+            // Do NOT ACK success when nothing changed. This used to always return ACCEPTED,
+            // including on an out-of-range position or a missed lock — so the GCS's accel-cal
+            // wizard advanced its step while the vehicle stayed on the previous face, and the
+            // two silently desynced for the rest of the calibration.
+            if (!applied) return MAV_RESULT_TEMPORARILY_REJECTED;
+            if (pos < 6) sendAccelPrompt(pos + 1);   // prompt next face
             return MAV_RESULT_ACCEPTED;
         }
 
@@ -380,8 +404,15 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
                 return MAV_RESULT_ACCEPTED;
             }
             // Defer both flash writes to update() (serviced this same Core-0 task).
-            if (p[0] == 1) params::requestSaveAll();
-            { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(5)); if (lk.ok()) g_state.cal.persist_pending = true; }
+            // Only on an actual WRITE request (param1 == 1). This used to also fire the
+            // calibration flash write for param1 == 0 ("read"), i.e. burning an NVS write
+            // cycle on a command that asked for nothing — pointless wear on a namespace the
+            // code elsewhere notes is already tight.
+            if (p[0] == 1) {
+                params::requestSaveAll();
+                StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(5));
+                if (lk.ok()) g_state.cal.persist_pending = true;
+            }
             return MAV_RESULT_ACCEPTED;
 
         case MAV_CMD_DO_SET_SERVO: {
@@ -492,7 +523,15 @@ static void onParamSet(const mavlink_message_t& msg) {
     char name[17];
     strncpy(name, ps.param_id, 16);
     name[16] = '\0';
-    if (params::set(name, ps.param_value)) {
+    bool persisted = false;
+    if (params::set(name, ps.param_value, &persisted)) {
+        if (!persisted) {
+            // Applied and live, but it will NOT survive a reboot. Silence here meant the
+            // operator tuned in the pool, power-cycled, and lost it with no clue why.
+            char wb[64];
+            snprintf(wb, sizeof(wb), "%s set but NOT saved (NVS full?)", name);
+            mav_stream::sendStatusText(MAV_SEVERITY_WARNING, wb);
+        }
         // ATUNE is a momentary trigger: setting it ≥1 starts the relay auto-tune.
         if (strncmp(name, "ATUNE", 16) == 0 && ps.param_value >= 1.0f) {
             StateLock lk(g_state.mtx_control);
@@ -524,18 +563,30 @@ static uint16_t s_prev_buttons = 0;
 static void onManualControl(const mavlink_message_t& msg) {
     mavlink_manual_control_t mc;
     mavlink_msg_manual_control_decode(&msg, &mc);
-    // x=forward, y=lateral, z=throttle/heave (500 neutral), r=yaw. Range ±1000.
-    // Apply the joystick gain to the translational axes (ArduSub JS_GAIN). This is the
-    // LIVE gain, which the gain buttons step at runtime; JS_GAIN_DEFAULT is only the
-    // power-on value.
+    // x=forward, y=lateral, z=throttle/heave (500 neutral), r=yaw.
+    //
+    // CLAMP FIRST. These are raw int16_t on the wire and MAVLink does not enforce the
+    // recommended ranges, so a glitching joystick bridge or a companion bug can legally
+    // send x = 32767. That became sp_forward = 32.7, and PILOT_EXPO cubes it
+    // (32.7^3 ~ 35000) before the mixer's uniform scale-down — turning what should be a
+    // small stick nudge into an instant full-authority burst in whichever direction the
+    // mix resolves. The per-motor clamp downstream bounds the OUTPUT but not the
+    // behaviour. ControlState documents these setpoints as -1..1; enforce it here, at the
+    // one place they enter the vehicle.
+    const float x = constrain((float)mc.x, -1000.0f, 1000.0f);
+    const float y = constrain((float)mc.y, -1000.0f, 1000.0f);
+    const float z = constrain((float)mc.z,     0.0f, 1000.0f);   // 500 = neutral
+    const float r = constrain((float)mc.r, -1000.0f, 1000.0f);
+    // Apply the joystick gain to the translational axes (JS_GAIN). This is the LIVE gain,
+    // which the gain buttons step at runtime; JS_GAIN_DEFAULT is only the power-on value.
     float gain = pilotGain();
     {
         StateLock lk(g_state.mtx_control);
         if (lk.ok()) {
-            g_state.control.sp_forward  = (mc.x / 1000.0f) * gain;
-            g_state.control.sp_lateral  = (mc.y / 1000.0f) * gain;
-            g_state.control.sp_throttle = ((mc.z - 500) / 500.0f) * gain;
-            g_state.control.sp_yaw      = (mc.r / 1000.0f) * gain;
+            g_state.control.sp_forward  = (x / 1000.0f) * gain;
+            g_state.control.sp_lateral  = (y / 1000.0f) * gain;
+            g_state.control.sp_throttle = ((z - 500.0f) / 500.0f) * gain;
+            g_state.control.sp_yaw      = (r / 1000.0f) * gain;
         }
     }
 

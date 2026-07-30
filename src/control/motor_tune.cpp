@@ -147,7 +147,12 @@ bool update(const int16_t rpm[NUM_THRUSTERS], float dt, uint32_t now,
                 if (s_period_n > 0 && s_amp > 1.0f) {
                     float Tu = 2.0f * (s_period_sum / s_period_n) / 1000.0f;
                     // Ultimate gain of the throttle→rpm plant, normalized to throttle units.
-                    float Ku = 4.0f * RELAY_A / ((float)M_PI * (s_amp / g_params.rpm_max));
+                    // RPM_MAX is GCS-editable with no lower clamp and is a divisor here; at 0
+                    // the whole expression collapses to Ku = 0, so the tune would silently
+                    // write an all-zero PI gain set. Guarded the same way thrust_trim.cpp
+                    // guards the identical param.
+                    const float rpm_full = (g_params.rpm_max > 1.0f) ? g_params.rpm_max : DEF_RPM_MAX;
+                    float Ku = 4.0f * RELAY_A / ((float)M_PI * (s_amp / rpm_full));
                     float Kp = constrain(0.33f * Ku, 0.0f, 4.0f);
                     float Ki = (Tu > 0) ? constrain(Kp / (0.5f * Tu), 0.0f, 1.0f) : 0.02f;
                     s_acc_kp += Kp; s_acc_ki += Ki;

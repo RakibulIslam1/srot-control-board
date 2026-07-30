@@ -48,6 +48,13 @@ enum : uint8_t {
 // so a read CAN miss the lock — returning 0 there would make a param download report a
 // bogus calibration (and, if the GCS then wrote that file back, destroy the real one).
 // Serving the last known value instead keeps a miss harmless.
+//
+// SEEDED FROM THE TABLE DEFAULTS in buildTable(), not left at zero. Zero-initialising was
+// a hole in exactly the scenario this exists to prevent: on the FIRST post-boot param
+// download, a lock miss on a *scale* row (CAL_ACC_S*, CAL_MAG_S*, whose real default is
+// 1.0) would report 0.0 — and a scale of zero, exported and later imported, silently
+// destroys the accel/mag calibration. The `def` field on those rows now actually does
+// something instead of being decorative.
 static float s_cal_shadow[CALP_COUNT] = {0};
 
 // Resolve a cal id to its float field. motor_dir is int8_t and handled separately.
@@ -326,6 +333,13 @@ static Preferences s_prefs;
 static void buildTable() {
     s_n = 0;
     for (uint16_t i = 0; i < N_SCALARS; ++i) s_table[s_n++] = SCALARS[i];
+    // Seed the CAL_* shadow cache with each row's declared default, so a lock miss on the
+    // very first read serves a plausible value (1.0 for a scale) rather than 0.0. See the
+    // comment on s_cal_shadow. calGet() overwrites these with real values on first success.
+    for (uint16_t i = 0; i < N_SCALARS; ++i) {
+        uint8_t cid = SCALARS[i].cal_id;
+        if (cid != CALP_NONE && cid < CALP_COUNT) s_cal_shadow[cid] = SCALARS[i].def;
+    }
     // (servo rows appended below; types are classified after the table is built)
 
     int k = 0;   // index into s_names/s_keys
@@ -437,16 +451,28 @@ bool getByName(const char* name, float& value_out) {
     return true;
 }
 
-bool set(const char* name, float value) {
+bool set(const char* name, float value, bool* persisted) {
+    if (persisted) *persisted = false;
     int i = indexOf(name);
     if (i < 0) return false;
     // CAL_* rows write through to g_state.cal and are persisted to NVS_NS_CAL by the
     // comms task; they own no key in NVS_NS_PARAMS.
-    if (s_table[i].cal_id != CALP_NONE) return calSet(s_table[i].cal_id, value);
+    if (s_table[i].cal_id != CALP_NONE) {
+        bool ok = calSet(s_table[i].cal_id, value);
+        if (persisted) *persisted = ok;   // cal rows persist via calibration::saveToNVS()
+        return ok;
+    }
     *s_table[i].ptr = value;
     s_prefs.begin(NVS_NS_PARAMS, false);
-    s_prefs.putFloat(s_table[i].nvskey, value);
+    // Check the write, like saveAll() does. putFloat returns 0 on failure, and this NVS
+    // namespace is only 0x5000 — a full or worn one would take the value in RAM, echo
+    // PARAM_VALUE (so the GCS shows it accepted), then lose it on the next boot with
+    // nothing said. Reported SEPARATELY from the return value: the value IS applied and
+    // live for this session, so "accepted" is correct; the operator just needs to know it
+    // will not survive a reboot.
+    bool wrote = (s_prefs.putFloat(s_table[i].nvskey, value) != 0);
     s_prefs.end();
+    if (persisted) *persisted = wrote;
     return true;
 }
 

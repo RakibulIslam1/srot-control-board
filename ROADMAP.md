@@ -159,6 +159,54 @@ default 0/off → unchanged until tuned; math in `ALGORITHMS.md §5`):
 > `tuning_guide.md` → `ARCHITECTURE.md`; `WIRING.md` → `HARDWARE.md`; `plan.md`/
 > `ideas_and_progress.md` → this file; `pico_thruster/` → `src/pico/`.
 
+### 2026-07-30 — Round-2 audit: 13 more defects, including an inverted depth PID
+
+Three parallel audit passes over the areas the first round had not read closely (comms/protocol,
+control/tasks, drivers + the three secondary MCUs). Full evidence per finding in
+[AUDIT.md](AUDIT.md) round 2. **The headline is R1 and it is the worst defect found in this
+codebase so far.**
+
+- **R1 (critical) — the depth PID's sign was inverted.** It ran `PID(target, measured_depth)`, but
+  depth is positive-DOWN while heave is positive-UP, so a target *deeper* than the current depth
+  produced an *ascend* command. `DEPTH_HOLD` was divergent, not mistuned. Far worse: the **SURFACE
+  failsafe** — leak, low thruster battery, GCS loss — sets the depth target to 0 through this same
+  loop, so the one mechanism meant to save a leaking vehicle **drove it down**. Verified numerically
+  across the whole chain (setpoint → PID → mixer → physical direction): at 3 m the old code commanded
+  DOWN. Fixed by running the PID in altitude (`−depth`), negating the *inputs* so the conditional
+  anti-windup and derivative-on-measurement stay self-consistent. It survived this long only because
+  the Bar30 had never been fitted — the loop had never once run closed.
+- **R2** — autotune's depth relay had the same inversion, independently written: it drove *away* from
+  the reference, giving monotonic divergence instead of the limit cycle it needs to measure.
+- **R3** — STUNT and PATTERN had no `abort()`, so a panic-disarm mid-spin left the state machine
+  loaded and the thrusters completed the remaining rotation on the next arm, with no command issued.
+- **R4** — PATTERN's `TURN_360`/`HEADROOM`/`RETURN` steps had **no timeout** and PATTERN/STUNT were
+  **outside the safety monitor entirely** — the two modes that drive full authority with no pilot in
+  the loop were the only automatic modes with no guard. Added a 30 s per-step ceiling and brought
+  both under the monitor (STUNT exempt from the angle guard only). PATTERN is also now refused
+  without a depth sensor, alongside DEPTH_HOLD and AUTO.
+- **R5** — a NaN in any `COMMAND_LONG` param passed straight through `constrain()` (built from `<`
+  and `>`, both false against NaN) and reached `(int16_t)NaN` on an armed thruster. Now rejected for
+  every command at the single dispatch choke point.
+- **R6** — `MANUAL_CONTROL` axes were unclamped; a bad packet became a full-authority burst after
+  `PILOT_EXPO` cubed it. Clamped at entry.
+- **R7** — the `CAL_*` shadow cache (added earlier this session) was zero-initialised, so a first-read
+  lock miss on a *scale* row reported 0.0 — which, exported and re-imported, destroys the accel/mag
+  calibration. Now seeded from each row's declared default.
+- **R8** — the safety monitor's own rate and depth guards **passed NaN silently** (a comparison
+  against NaN is false, so `if (x > limit) fail` never fires). Both now fail closed.
+- **R9** — preempting a move never resolved the displaced command, hanging its action. **R10** —
+  `params::set()` reported success on a failed NVS write. **R11–R13** — zero-guards on two
+  GCS-editable divisors, and two ACK-correctness fixes.
+- **Deferred, needing hardware or a two-sided change** (documented in AUDIT.md): the Pico's e-stop
+  line fails *permissive* (`INPUT_PULLDOWN`, active-HIGH — a broken wire reads as "run"); the LoRa
+  mission-waypoint upload has no CRC and the SX127x PHY CRC is never enabled, making it the only
+  wire protocol in the tree without corruption detection.
+- All six envs build. Docs: `ALGORITHMS.md` §4 now spells the depth sign convention out explicitly,
+  since that is what was misread.
+- **Verify on hardware before any dive:** depth hold with the Bar30 actually fitted — hand-move the
+  sensor and confirm it drives the *correct* way — and specifically confirm the SURFACE failsafe
+  ascends. Nothing about this loop has ever been exercised closed.
+
 ### 2026-07-30 — Thruster-voltage link brought up; low-battery failsafe debounced (B12)
 
 The 2nd board's ESP-NOW sender works on hardware: `THR 15.10 V | knob 253 deg | power ON |

@@ -1,10 +1,51 @@
-# Integrating SROT into `duburi_ws`
+# Integrating Hengla (the SROT board) into `duburi_ws`
 
 **Audience:** an agent or engineer who has never seen this board, tasked with modifying
-[`fh1m/duburi_ws`](https://github.com/fh1m/duburi_ws) to fly on SROT instead of a Pixhawk/ArduSub.
+[`fh1m/duburi_ws`](https://github.com/fh1m/duburi_ws) to fly on this controller instead of a
+Pixhawk/ArduSub.
+
+**Naming:** the *board* is **SROT**; the *firmware* is **Hengla**. `MAV_CMD_SROT_MOVE` keeps its
+name and its wire id (31000) — it is board-level, and renaming it would break every client.
 
 **Read first:** [`JETSON_COMMS.md`](JETSON_COMMS.md) — the authoritative wire contract. This document
 is the *migration plan*; that one is the *interface*.
+
+---
+
+## ⚠ 0a. Read this before you design anything
+
+A two-round audit on 2026-07-30 found 22 real defects, several of which change what a companion must
+assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affect **your** design:
+
+1. **The depth PID's sign was inverted, and the SURFACE failsafe drove the vehicle DOWN.** Fixed —
+   but the loop had **never run closed**, because the Bar30 was not fitted during development. Treat
+   every depth-dependent behaviour (`DIVE`, and the depth hold underlying *every* other primitive) as
+   **unproven** until you bench-verify it. Do not design a mission that depends on depth accuracy
+   before someone has hand-tested that loop. (`AUDIT.md` R1.)
+2. **A move now always reaches exactly one terminal result** — `ACCEPTED`, `CANCELLED`, `FAILED` or
+   `DENIED`. Three separate hang paths were fixed. **If you write the action client to wait only for
+   `ACCEPTED`, it will still hang**, because preemption resolves as `CANCELLED` and an unstartable
+   move as `FAILED`. See the terminal-result table in `JETSON_COMMS.md` §5.
+3. **Preemption is now observable.** Sending a new `SROT_MOVE` while one is running resolves the old
+   one `CANCELLED`. This is the documented way to interrupt, and your action server should map it to
+   *abort*, not *error*.
+4. **Non-finite command parameters are rejected** (`DENIED`) for every command. An uninitialised or
+   `NaN` field in a `Move` goal fails cleanly instead of being accepted — it used to reach the ESCs as
+   an undefined DShot value. Validate goals Python-side anyway, but you will now get told.
+5. **`MANUAL_CONTROL` axes are clamped, not rejected** (`x/y/r` ±1000, `z` 0..1000). Out-of-range no
+   longer produces a full-authority burst, but it is silently truncated — so a units bug in your
+   conversion will now under-drive rather than over-drive, which is harder to notice. Keep the
+   conversion helpers' bounds assertions.
+6. **New disarm paths in AUTO:** the safety monitor now fails closed on a NaN gyro or NaN depth. A
+   sensor going non-finite mid-move aborts and disarms instead of continuing on garbage. Your
+   supervisor must handle an unexpected disarm mid-action.
+7. **`PATTERN` is refused without a depth sensor** (like `DEPTH_HOLD` and `AUTO`), falling back to
+   `STABILIZE` with a `STATUSTEXT`. If you drive modes directly, handle the refusal.
+8. **Still outstanding, do not rely on:** the LoRa mission-waypoint upload path has **no CRC** and the
+   radio's PHY CRC is not enabled — it is the one wire protocol in the tree with no corruption
+   detection, so do not use it to carry navigation targets. And the Pico's hardware e-stop line fails
+   *permissive* (a broken wire reads as "run"); it is redundant with two other failsafes, but do not
+   count it as your safety story. Both are documented as deferred in `AUDIT.md`.
 
 ---
 
@@ -16,8 +57,9 @@ is the *migration plan*; that one is the *interface*.
 - It speaks **MAVLink 2** over serial. `duburi_ws` already speaks MAVLink 2 via **pymavlink** — so
   this is a *transport-and-verbs* swap, not a rewrite.
 - The single custom verb, **`MAV_CMD_SROT_MOVE` (31000)**, has the exact shape of a ROS 2 action:
-  immediate `IN_PROGRESS`, ~3 Hz progress 0..99, terminal `ACCEPTED`/100. It maps **1:1 onto
-  `duburi_interfaces/Move`**.
+  immediate `IN_PROGRESS`, ~3 Hz progress 0..99, then **one of four terminal results**
+  (`ACCEPTED` / `CANCELLED` / `FAILED` / `DENIED`). It maps **1:1 onto `duburi_interfaces/Move`** —
+  including preemption, which the board now reports rather than leaving dangling.
 - Consequence: most of `motion_*.py` collapses into *"send one command, relay its progress"*, and
   several Python control loops delete entirely.
 - **Vision, planner, missions, YASMIN, the `COMMANDS` registry and `Move.action` are untouched.**
@@ -248,8 +290,19 @@ vision servoing · payload sequencing · logging.
 - [ ] **Thruster directions verified** against `docs/THRUSTER_MAP.md` using Bondor's motor test. The
       four horizontals are at 45° and each pushes a *different diagonal* — they do not share a
       direction. Fix any reversed one with `MOT_n_DIRECTION`.
-- [ ] **Depth sensor fitted.** Without it, `DEPTH_HOLD`/`AUTO` are refused and the SURFACE failsafe
-      falls back to a fixed open-loop ascent.
+- [ ] **Depth sensor fitted.** Without it, `DEPTH_HOLD`/`AUTO`/`PATTERN` are refused and the SURFACE
+      failsafe falls back to a fixed open-loop ascent.
+- [ ] **⚠ Depth loop verified BY HAND, on the bench, before it is trusted in water.** Its sign was
+      inverted until 2026-07-30 and it has never run closed (no Bar30 was fitted during development),
+      so no observed vehicle behaviour has ever validated it. Two checks, both mandatory:
+      - Enter `DEPTH_HOLD`, then raise and lower the sensor by hand. The vertical thrusters must push
+        **back toward** the latched depth, not away from it.
+      - Force the SURFACE failsafe (e.g. trip the leak input with `LEAK_EN = 1`) at a simulated depth
+        and confirm the demand is **ascend**. This is the path that was driving the vehicle *down*.
+- [ ] **Terminal-result handling in the action client** covers `CANCELLED`, `FAILED` and `DENIED`, not
+      just `ACCEPTED` — otherwise a preempted or unstartable move hangs the action. `JETSON_COMMS.md` §5.
+- [ ] **Goal validation Python-side** rejects `NaN`/`inf` before sending. The board now rejects them
+      too (`DENIED`), but failing in your own node gives a far better error.
 - [ ] **`THR_TRIM_EN = 1` (in water)** if you need repeatable distance — it is **off** by default and
       must stay off with props in air. See `docs/T200_PROFILE.md`.
 - [ ] **`RPM_MAX`** set for your pack (3600 @ 16 V for a T200).
