@@ -277,7 +277,28 @@ found this by reading `dispatchCommand()`, not the docs.
 
 ---
 
-## 11. For v3 — the one architectural ask
+## 11. For v3 — the one architectural ask → **now a spec: [`VISION_API.md`](VISION_API.md)**
+
+> **Update.** This ask has been written up as a full implementation spec —
+> **[`VISION_API.md`](VISION_API.md)** — with the wire contract, the plumbing, the control law
+> and its rationale, the safety requirements, bandwidth/latency budgets with the arithmetic
+> shown, and a staged build order with a bench check per stage. Read that instead of this
+> section; the paragraphs below are kept as the original motivation.
+>
+> **Two findings from writing it that you should know regardless:**
+>
+> 1. **The dialect already has everything.** `src/comms/mavlink_bridge.h:17` includes
+>    `ardupilotmega`, which supersets `common`, so `mavlink_msg_landing_target.h`,
+>    `vision_position_estimate`, `distance_sensor` and `odometry` **already compile into the
+>    binary**. Ingest is one `case` in `mav_commands::handle()` — no custom message, no dialect
+>    regeneration. This was the main thing we assumed would be expensive and isn't.
+>
+> 2. **`feedforward learn` is a latent bug for any autonomous mode.** It is gated on the pilot
+>    sticks being centred (`task_control_loop.cpp:692-693`). A mode that never drives `sp_*` —
+>    which is every autonomous mode, including a future vision mode — leaves `learn`
+>    permanently **true**, so the CoB auto-trim learns against machine-commanded effort. AUTO
+>    is already deliberately excluded from trim learning for exactly this reason; the exclusion
+>    should probably be "any non-pilot mode" rather than an enumerated list.
 
 **A position/velocity ingest path.** There is no estimator (`docs/VS_ARDUSUB.md:100-103`
 is admirably direct about this) and, more importantly, no *consumer* for one:

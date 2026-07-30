@@ -80,6 +80,9 @@ failsafe have no data and stay inert.
 | **[PARAMETERS.md](PARAMETERS.md)** | Every parameter, defaults, units, and the backup workflow |
 | **[JETSON_COMMS.md](JETSON_COMMS.md)** | The companion-computer contract — messages, rates, units, sign conventions |
 | **[DUBURI_WS_INTEGRATION.md](DUBURI_WS_INTEGRATION.md)** | Porting the duburi_ws ROS 2 stack onto this board |
+| **[VISION_API.md](VISION_API.md)** | ⭐ Vision-guided control spec — bearings in, 500 Hz loop on-board (**not yet implemented**) |
+| **[JETSON_FEEDBACK.md](JETSON_FEEDBACK.md)** | Findings sent to us *by* the companion team, ranked by what blocks them |
+| **[AGENTS.md](AGENTS.md)** | Working rules for agents/devs + the invariants co-owned with the sibling repos |
 | **[AUDIT.md](AUDIT.md)** | Firmware audit: findings, evidence, and what was fixed |
 | **[docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md)** | Honest comparison — including where ArduSub is still ahead |
 | **[docs/BLUEOS.md](docs/BLUEOS.md)** | What works with BlueOS, what cannot, and how to configure it |
