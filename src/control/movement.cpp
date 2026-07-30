@@ -20,6 +20,9 @@ static float    s_yaw_rate = 0;                 // deg/s (turn or arc)
 static float    s_target_yaw = 0;               // rad (absolute turn goal)
 static float    s_depth_ramp = 0, s_depth_goal = 0;   // smoothed / commanded depth setpoint
 static bool     s_running = false;
+// Pending one-shot heading lock, emitted on the next update() and then cleared.
+static float    s_yaw_lock = 0;
+static bool     s_yaw_lock_pending = false;
 
 static float wrapPi(float e) {
     if (!isfinite(e)) return 0.0f;
@@ -32,6 +35,7 @@ static uint32_t brakeMs(float cruise) { return (uint32_t)(g_params.move_brake_k 
 void enter(float cur_depth) {
     s_depth_ramp = s_depth_goal = cur_depth;
     s_type = Type::NONE; s_phase = PH_IDLE; s_running = false; s_cur_speed = 0;
+    s_yaw_lock_pending = false;
 }
 
 void start(Type t, float primary, float speed, uint8_t submode, float aux,
@@ -42,6 +46,19 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
     s_speed = constrain(speed, 0.0f, g_params.move_cruise_max);
     s_depth_goal = s_depth_ramp;                 // hold depth unless DIVE
     s_uf = s_ul = 0; s_yaw_rate = 0;
+
+    // Lock the heading this command starts with. Every verb that is not itself a
+    // heading change gets it, so "go forward 3 s" cannot yaw away mid-leg: the
+    // attitude loop is handed an explicit absolute target instead of relying on
+    // whatever it last latched. ARC and TURN are excluded — they command yaw.
+    switch (t) {
+        case Type::FWD: case Type::BACK: case Type::LEFT: case Type::RIGHT:
+        case Type::HOLD: case Type::STOP: case Type::DIVE:
+            s_yaw_lock = cur_yaw; s_yaw_lock_pending = true;
+            break;
+        default:
+            break;
+    }
 
     switch (t) {
         case Type::FWD:   s_uf = +1; break;
@@ -82,6 +99,8 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
 void abort() {
     s_type = Type::STOP; s_phase = PH_BRAKE; s_start_ms = millis();
     s_brake_ms = brakeMs(s_cur_speed); s_running = true;
+    // Don't re-latch a heading here: abort is a safety/preemption path and the current
+    // hold target is already the right one to brake against.
 }
 
 Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
@@ -89,6 +108,13 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
     (void)rpm;   // RPM no longer integrated (distance estimate removed; timer-based only)
     Demand d;
     const uint32_t now = millis();
+
+    // Emit any pending heading lock exactly once, then clear it.
+    if (s_yaw_lock_pending) {
+        d.yaw_lock = s_yaw_lock;
+        d.yaw_lock_valid = true;
+        s_yaw_lock_pending = false;
+    }
 
     // Smooth depth-target ramp toward the goal (no splash / lurch).
     const float dstep = g_params.move_depth_rate * dt;
@@ -121,8 +147,17 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
         }
         case PH_TURN: {
             float err = wrapPi(s_target_yaw - yaw);
-            if (fabsf(err) < 0.03f) { d.yaw = 0; s_phase = PH_DONE; }   // ~1.7° → hold new heading
-            else d.yaw = constrain((err > 0 ? 1.0f : -1.0f) * s_yaw_rate / g_params.pilot_yaw_rate, -1.0f, 1.0f);
+            if (fabsf(err) < 0.03f) {
+                d.yaw = 0; s_phase = PH_DONE;
+                // Hold the heading we were ASKED for, not the one the ~1.7° completion
+                // threshold happened to stop at — otherwise "turn to 90°" settles
+                // anywhere in 88.3..91.7° and then holds that error forever, and the
+                // error compounds across a sequence of turns.
+                d.yaw_lock = s_target_yaw;
+                d.yaw_lock_valid = true;
+            } else {
+                d.yaw = constrain((err > 0 ? 1.0f : -1.0f) * s_yaw_rate / g_params.pilot_yaw_rate, -1.0f, 1.0f);
+            }
             break;
         }
         case PH_DIVE:

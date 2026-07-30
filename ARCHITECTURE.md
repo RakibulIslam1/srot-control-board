@@ -59,11 +59,19 @@ Loop period = **2 ms (500 Hz)** — the fastest whole-ms rate on the 1 kHz FreeR
 ```
 
 ### Sensing
-Attitude comes from the **BNO085's onboard sensor fusion** (accel+gyro, mag off) — a ready
-GAME_ROTATION_VECTOR quaternion at 400 Hz over I2C, read **INT-gated** (only when the sensor
-signals a full packet). SROT does not run its own EKF. Quaternion→euler clamps the `asinf`
-argument (NaN guard). Bar30 depth (~20 Hz) and battery/leak ADC (~10 Hz, 4× oversample) are
-decimated off the 500 Hz path. On a BNO reset, rotation samples are held for 150 ms.
+Attitude comes from the **BNO085's onboard sensor fusion** (accel+gyro, **mag never fused**) —
+a ready GAME_ROTATION_VECTOR quaternion at 400 Hz over I2C, read **INT-gated** (only when the
+sensor signals a full packet). SROT does not run its own EKF. Quaternion→euler clamps the
+`asinf` argument (NaN guard). Bar30 depth (~20 Hz) and battery/leak ADC (~10 Hz, 4× oversample)
+are decimated off the 500 Hz path. On a BNO reset, rotation samples are held for 150 ms.
+
+Excluding the magnetometer from the fusion is the deliberate trade that makes attitude immune
+to thruster current — an in-hull compass reads the motors, not the earth. The consequence is
+that yaw is **relative** (arbitrary zero, drifts ~0.5–3 °/min). `control/yaw_ref` optionally
+buys the earth reference back with a **one-shot** magnetic alignment at boot (`MAG_YAW_REF`,
+default off): the mag is read once while disarmed and still, an offset is computed, and the mag
+is never consulted again. The offset is applied at the single point where yaw is published, so
+every consumer sees one consistent heading. See ALGORITHMS.md §1 and PARAMETERS.md.
 
 ### The cascade (STABILIZE / DEPTH_HOLD / SURFACE) — `control/attitude_control.cpp`
 ```
@@ -72,8 +80,11 @@ inner (rate):   torque       = PID(desired_rate, gyro) + ATC_RAT_*_FF · desired
 ```
 - Roll & pitch are angle-stabilized (stick → target lean, with `PILOT_EXPO`).
 - **Yaw**: active stick = fine rate command (`PILOT_YAW_RATE` deg/s); centred stick =
-  **heading-hold** (captures heading on mode entry, holds via `ATC_ANG_YAW_P`). Without a
-  magnetometer the held heading drifts slowly.
+  **heading-hold** (captures heading on arm and on mode entry, holds via `ATC_ANG_YAW_P`).
+  AUTO goes further and sets the target explicitly via `attitude::holdYaw()`: every translate
+  leg locks the heading it began with, and a finished `TURN` locks the heading it was
+  *commanded* to reach. `MANUAL` (mode 19) has **no** heading or attitude hold at all — it is
+  raw passthrough, an escape hatch rather than a driving mode.
 - PID (`control/pid.h`): derivative-on-measurement (no setpoint kick), integrator clamp
   `ATC_RAT_*_IMAX`, output clamp ±1; wrap guards NaN.
 

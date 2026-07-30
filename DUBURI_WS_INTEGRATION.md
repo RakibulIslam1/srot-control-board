@@ -46,7 +46,7 @@ its methods are called throughout `motion_*.py`. Creating that interface is step
 |---|---|---|
 | `duburi_control/pixhawk.py` | **Rewrite** → `srot.py` behind a HAL | Different verbs (see §4) |
 | `duburi_control/connection_config.py` | **Rewrite** | No Pixhawk USB IDs / BlueOS router; SROT is a direct serial or UDP endpoint |
-| `duburi_control/heading_lock.py` | **Delete** | SROT holds heading on-board. The reason this existed — an untrusted in-hull compass — is solved differently: SROT uses a BNO085 game-rotation vector with the magnetometer disabled |
+| `duburi_control/heading_lock.py` | **Delete** | SROT holds heading on-board, and every `SROT_MOVE` translate leg explicitly locks the heading it started with. The reason this existed — an untrusted in-hull compass — is solved differently: SROT's attitude is a BNO085 **game**-rotation vector, so the magnetometer is never fused and thruster current cannot move yaw. See the caveat below |
 | `duburi_control/motion_depth.py` (ALT_HOLD dance, prime phase, `SET_POSITION_TARGET_GLOBAL_INT`) | **Delete** | `SROT_MOVE` type 5 (dive) ramps the depth setpoint on-board at `MOVE_DEPTH_RATE` |
 | `duburi_control/motion_easing.py` | **Delete** | `MOVE_ACCEL` ramps and `MOVE_BRAKE_*` braking are on-board |
 | `motion_{yaw,forward,lateral}.py` | **Collapse** | Each becomes one `SROT_MOVE` + progress relay |
@@ -265,6 +265,41 @@ vision servoing · payload sequencing · logging.
 | `THR_POLE_PAIRS` is compile-time (7, correct for T200) | A different motor needs a firmware rebuild |
 | `STYLE` is always a roll at 90°/s | Not selectable |
 | Mission protocol (`MISSION_*`) is handled but minimal | Prefer `SROT_MOVE` sequencing from ROS |
+| **Yaw is RELATIVE unless `MAG_YAW_REF = 1`** | An arbitrary power-on zero drifting ~0.5–3 °/min. Heading *hold* is unaffected (it tracks a target in the same frame), but **absolute `TURN` (`p4 = 1`) is only meaningful with the reference on**, and headings are not comparable between dives. See below |
+
+### The yaw reference, in detail — this one will affect your design
+
+`duburi_ws` grew `heading_lock.py` because the in-hull compass could not be trusted. SROT
+answers the same problem by keeping the magnetometer **out of the attitude fusion entirely**
+(`SH2_GAME_ROTATION_VECTOR`), so no amount of thruster current moves roll/pitch/yaw. The
+trade is that yaw has no earth reference.
+
+`MAG_YAW_REF = 1` enables a **one-shot** alignment: at boot, disarmed and still, the board
+reads the magnetometer once, computes `offset = magnetic_heading − game_yaw`, and adds that
+offset to yaw from then on — never consulting the mag again. Heading becomes absolute without
+reintroducing motor sensitivity.
+
+What this means for a ROS integration:
+
+- **Do not build a Python heading loop.** Translate legs already lock heading on-board, and a
+  50 Hz outer loop over a link with a 5 s failsafe is strictly worse than the 500 Hz on-board one.
+- **Relative turns (`p4 = 0`) always work.** Prefer them.
+- **Absolute turns need `MAG_YAW_REF = 1`** *and* a mag calibration done in the hull with
+  electronics powered. Verify against a real compass at four headings before trusting it.
+- **It fixes the reference, not the drift.** For a long mission, treat absolute heading as
+  slowly degrading. If you need better, that is what the DVL is for — keep it.
+- Alignment can be **refused** (bad mag cal, implausible field, vehicle moving); the board then
+  falls back to relative yaw and says so over `STATUSTEXT`. A companion that depends on absolute
+  headings should **check for that message at startup** rather than assume it succeeded.
+
+### Parameter backup — do this before you reflash anything
+
+The board's parameters survive a firmware upload but are wiped by a `PARAM_DEFAULTS_VER` bump
+(which has happened four times) or a chip erase. Bondor's **Parameters → Export** writes a
+`.params` file that includes the `CAL_*` sensor calibration — mag/accel/level trim and the
+detected motor directions — which lives in separate storage and is otherwise unrecoverable.
+Keep an exported file in the `duburi_ws` repo alongside the mission configs; a board that comes
+up reporting `"Params reset to build defaults"` is flyable but *not* the vehicle you tuned.
 
 ---
 

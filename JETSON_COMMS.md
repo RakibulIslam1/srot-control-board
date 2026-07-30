@@ -208,6 +208,41 @@ while True:
 > **thruster** pack, which arrives from a 2nd board over ESP-NOW. That ESP-NOW sender is not
 > implemented yet, so id 1 currently reports nothing.
 
+### Sign conventions — read this before you write a controller
+
+Getting one of these backwards produces a vehicle that dives when told to surface, so they
+are spelled out rather than left to inference.
+
+| Quantity | Convention | Where |
+|---|---|---|
+| **Depth (internal)** | **Positive DOWN**, metres below the surface reference. 0 = surface. | `bar30.h` `depth_m`, `MS5837::getDepth()` |
+| **Depth (on the wire)** | **`VFR_HUD.alt = −depth`** → *negative* underwater, because MAVLink `alt` is an **altitude**. 3 m deep reports `alt = −3.0`. | `mav_stream.cpp` |
+| **Depth setpoint** | `SROT_MOVE` DIVE `p2` is a **positive depth in metres**, not an altitude. Clamped at ≥ 0 — you cannot command above the surface. | `movement.cpp`, `depth_control.cpp` |
+| **Heave / throttle stick** | **Positive = UP = ascend = depth decreases.** `MANUAL_CONTROL.z` is 0..1000 with **500 = neutral**, so `z > 500` ascends. | `mav_commands.cpp` |
+| **Yaw** | **Radians, −π..+π**, +ve = **clockwise seen from above** (standard aerospace right-hand-down). | `ATTITUDE.yaw` |
+| **Yaw reference** | **RELATIVE by default** — arbitrary zero, drifts ~0.5–3 °/min. Absolute only when `MAG_YAW_REF = 1` (see PARAMETERS.md). Absolute `TURN` (`p4 = 1`) is only meaningful with it on. | `yaw_ref.cpp` |
+| **Roll / pitch** | Radians; +roll = starboard down, +pitch = nose up. `CAL_LVL_R/P` mounting trim is already subtracted. | `task_sensor_read.cpp` |
+| **Surge / sway** | `MANUAL_CONTROL.x` +ve = **forward**, `.y` +ve = **starboard** (right). Both ±1000. | `mav_commands.cpp` |
+| **RPM** | `ESC_STATUS.rpm` is **signed** — negative means the thruster is running in reverse. | `mav_stream.cpp` |
+
+### Heading during moves — what the board guarantees
+
+In every stabilized mode (`STABILIZE`, `DEPTH_HOLD`, `AUTO`) the board **holds heading
+whenever the yaw demand is centred**. Concretely:
+
+- Heading is captured **on arm** (and on every mode change).
+- Every `SROT_MOVE` translate leg — `FWD`, `BACK`, `LEFT`, `RIGHT`, plus `HOLD`, `STOP` and
+  `DIVE` — **locks the heading it started with** and tracks it for the whole leg, including
+  the braking phase. A companion does **not** need its own heading loop for straight lines.
+- A completed `TURN` locks the heading it was **commanded** to reach, not wherever the
+  completion threshold stopped — so a sequence of turns does not accumulate error.
+- `ARC` is the exception: it commands a yaw rate by design, so no lock.
+- A yaw command (stick or `TURN`) always **overrides** the lock and the new heading becomes
+  the held one on release.
+
+`MANUAL` (mode 19) is raw passthrough with **no stabilization at all** — no heading hold, no
+attitude hold. It is the escape hatch, not a driving mode. Fly `STABILIZE`.
+
 ### `NAMED_VALUE_FLOAT` names
 
 | name       | Meaning                                                             |
@@ -327,3 +362,12 @@ as an integer).
 - On completion `MV_TYPE` is **not** re-sent; you get `MV_STATE = 0` and `MV_PROG = 1.0`.
 - Autotune and motor-tune now **require ARMED**, and **disarming aborts them** (as does leaving the
   mode). Motor test no longer auto-disarms when you stop sending the keep-alive.
+- **Absolute `TURN` (`p4 = 1`) needs `MAG_YAW_REF = 1`.** Without it, yaw has no earth reference,
+  so "turn to 90°" means 90° from an arbitrary power-on zero — repeatable within one session,
+  meaningless between sessions.
+- **`MANUAL` mode has no heading or attitude hold.** If a companion sets `MANUAL` to "get raw
+  control", it also gives up stabilization; `STABILIZE` is what you want.
+- **Depth is positive-down internally but negated on the wire.** See the sign-conventions table.
+- **A parameter download wipes nothing, but a `PARAM_DEFAULTS_VER` bump wipes everything.**
+  If the board comes up with `STATUSTEXT "Params reset to build defaults"`, the tuning is gone
+  and needs restoring from a Bondor export — the vehicle will fly, but not as tuned.

@@ -155,11 +155,14 @@
 // Swap the BNO085 roll and pitch axes (and their gyro rates) to match how the
 // sensor is physically mounted on this board.
 #define BNO_SWAP_ROLL_PITCH     1
-// Ignore the magnetometer. Attitude uses the 6-axis GAME rotation vector (no
-// mag) regardless; with this 0 we also stop enabling the mag report so magnetic
-// fields (thrusters/metal) cannot influence anything. Yaw is then RELATIVE
-// (holds short-term, drifts slowly) — the pilot steers heading.
-#define BNO_USE_MAG             0
+// Enable the BNO085's calibrated-magnetic-field REPORT. This does NOT put the mag
+// into the attitude fusion — attitude is always the 6-axis GAME rotation vector, so
+// thruster/metal fields can never move roll/pitch/yaw. It only makes the raw field
+// vector available to (a) the MAG calibration routine and (b) control/yaw_ref, which
+// reads it ONCE at boot to give yaw an absolute earth reference (MAG_YAW_REF).
+// With this 0, yaw is purely RELATIVE: it holds short-term and drifts slowly, and the
+// pilot steers heading. Costs one extra 50 Hz report on the INT-gated SHTP link.
+#define BNO_USE_MAG             1
 #define I2C_ADDR_BAR30          0x76        // MS5837
 #define I2C_ADDR_OLED           0x3C        // SH1106
 #define OLED_DEPTH_FULL         10.0f       // depth (m) that fills the OLED depth bucket bar
@@ -387,6 +390,17 @@
 #define DEF_MOT_BAT_V_MIN       13.2f       // V — clamp floor (also stops the gain blowing up)
 #define DEF_MOT_BAT_V_MAX       0.0f        // V — 0 = compensation OFF until you set the pack
 
+// One-shot magnetic yaw reference (control/yaw_ref). Attitude stays on the mag-FREE
+// 6-axis GAME rotation vector; the magnetometer is read ONCE at boot (disarmed, still) to
+// work out where north is, and never consulted again — so thruster currents can never move
+// the attitude solution, but heading is absolute from the first second.
+// This fixes the yaw REFERENCE, not the drift: the 6-axis yaw still creeps ~0.5-3 deg/min,
+// so absolute heading degrades over a long dive. That is the accepted trade for immunity.
+// Default OFF: needs a mag calibration done IN THE HULL with electronics powered first, and
+// the tilt-compensation axis signs verified against a real compass (see docs).
+#define DEF_MAG_YAW_REF         0.0f        // 0 = yaw relative (as before) · 1 = align at boot
+#define DEF_MAG_DECL            0.4f        // deg, E positive (~0.4 E for Bangladesh)
+
 // Pilot command shaping (micro-movements).
 #define DEF_PILOT_YAW_RATE      45.0f       // deg/s at full yaw stick (lower = finer)
 #define DEF_PILOT_EXPO          0.30f       // stick expo for fine centre resolution
@@ -477,12 +491,22 @@
 //
 // WARNING: a bump DISCARDS all user-set parameter values (tuning, pin assignments,
 // servo config). Sensor calibration is NOT affected — it lives in NVS_NS_CAL.
+//
+// BEFORE YOU BUMP THIS: export the parameters from Bondor (Parameters -> Export). Four
+// bumps have already silently thrown away a pool tuning session. A bump is the ONLY
+// reason to lose params on a reflash — a plain upload preserves NVS.
+//
+// ADDING a parameter does NOT need a bump: a key that isn't in NVS yet falls back to its
+// DEF_*, so new params get their defaults while existing ones keep their stored values.
+// Only bump when an EXISTING default must override what boards already have saved.
+//
 // Bumped to 2: T200 thruster defaults (RPM_MAX/RPM_FF_A) + clearing a stale stored
 // RPM_LOOP=0 that MOTOR_TUNE's saveAll() had frozen in.
 // Bumped to 3: low-end resolution — MOT_SPIN_MIN 0.10 -> 0.02 and the new RPM_MIN_TGT,
 // so a 1% command is a crawl instead of ~26% of full speed.
 // Bumped to 4: RPM removed from the attitude path (RPM_LOOP default 0) and replaced by
 // the slow thrust normalisation + battery feedforward (THR_TRIM_*, MOT_BAT_V_*).
+// NOT bumped for the CAL_*/MAG_* params: they are additions, so existing tuning survives.
 #define PARAM_DEFAULTS_VER      4
 #define NVS_KEY_DEFAULTS_VER    "p_defver"
 

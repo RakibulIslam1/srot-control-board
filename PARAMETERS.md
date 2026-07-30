@@ -1,7 +1,7 @@
 # SROT — Parameter Reference (complete)
 
-Every parameter in the live table, documented. `params::count()` = **189**:
-**109** scalar params + **80** servo params (16 channels × 5).
+Every parameter in the live table, documented: **113** scalar params + **26** calibration
+views + **80** servo params (16 channels × 5).
 
 SROT is now **SROT-native** — it no longer disguises itself as ArduSub, and the old
 QGC-compatibility dummy params have been **removed**. The ground station is **Bondor**
@@ -12,6 +12,30 @@ Storage: every value persists to NVS flash and survives reboot. `PIN_*` changes 
 reboot. Wire type is REAL32 for all params.
 
 Legend: **[R]** real · **[i]** informational/inert (defined, not read by the control loop).
+
+---
+
+## ⚠ Back your parameters up before you reflash
+
+A normal firmware upload **preserves** NVS, so your tuning survives. Two things wipe it:
+
+1. **A build that bumps `PARAM_DEFAULTS_VER`** (`include/config.h`). On the next boot
+   `params::init()` rewrites *every* parameter from its compiled `DEF_*` and reports
+   `Params reset to build defaults`. This has already discarded pool tuning **four times**.
+2. **A full-chip erase** (`esptool erase_flash`, `pio run -t erase`).
+
+**Bondor → Parameters → Export** writes a QGC-compatible `.params` file with every value,
+**including the `CAL_*` sensor calibration** — which lives in a separate NVS namespace and
+is otherwise gone for good (redoing the mag cal means physically spinning the vehicle).
+**Import** shows a diff, writes only what changed, and confirms each write against the
+vehicle's `PARAM_VALUE` echo before reporting success.
+
+Adding a *new* parameter never needs a bump — an absent NVS key falls back to its `DEF_*`,
+so new params get defaults while existing ones keep their stored values.
+
+`SYS_PARAM_VER` **[i]** reports the build's `PARAM_DEFAULTS_VER`. It is forced every boot
+and read by nothing, so it exists purely to stamp exported files with the schema they came
+from. Import skips it (along with the momentary `ATUNE` / `MAG_ALIGN` triggers).
 
 ---
 
@@ -107,6 +131,36 @@ the **Pico RPM closed loop** (`THR_RPM_CLOSED_LOOP=1`, now enabled) — **precon
 | `PILOT_SPEED` **[R]** | 0..1 | 1.0 | Forward/lateral scale. Lower for delicate translation. |
 | `JS_GAIN_DEFAULT` **[R]** | 0..1 | 0.5 | Pilot gain applied to manual-control inputs. |
 
+### Heading reference — one-shot magnetic alignment (`control/yaw_ref`)
+Attitude comes from the BNO085's **`SH2_GAME_ROTATION_VECTOR`** — the 6-axis accel+gyro
+fusion with **no magnetometer**. That is deliberate: inside a metal hull with eight
+thrusters pulling tens of amps, a mag-fused yaw jumps the moment you throttle up. The cost
+is that yaw is **relative** — an arbitrary zero, drifting ~0.5–3 °/min.
+
+`MAG_YAW_REF` buys back the earth reference without letting the mag into the loop. Once at
+boot, disarmed and still, it reads the magnetometer, computes
+`offset = magnetic_heading − game_yaw`, and adds that offset to yaw forever after. The mag
+is **never consulted again**, so thruster currents cannot move the attitude solution.
+
+> **This fixes the reference, not the drift.** Absolute heading still degrades over a long
+> dive. Correcting drift would need a continuous mag correction — exactly the motor
+> sensitivity the 6-axis fusion was chosen to avoid.
+
+| Param | Unit | Default | What it does |
+|---|---|---|---|
+| `MAG_YAW_REF` **[R]** | 0/1 | **0** | 0 = yaw relative (unchanged behaviour). 1 = align once at boot. |
+| `MAG_DECL` **[R]** | deg | 0.4 | Local magnetic→true north offset, east positive (~0.4° for Bangladesh). |
+| `MAG_ALIGN` **[R]** | 0/1 | 0 | Momentary: set 1 to re-align. **Refused while armed** (it would step the heading-hold target mid-dive). Auto-clears. |
+
+**Before enabling it:** run the mag calibration **in the hull, with electronics powered and
+thrusters idle** — otherwise the hard-iron offsets are wrong and the heading is wrong with
+them. Then verify at four known headings against a real compass; a mirrored
+tilt-compensation axis reads plausibly but is 90°/180° out.
+
+Alignment **fails safe**: poor mag accuracy (`< 2`), field magnitude outside 25–65 µT, or
+unstable samples all **refuse**, leaving the offset at 0 and yaw relative. Every outcome —
+success *and* refusal — is announced over `STATUSTEXT`.
+
 ### Battery (dual) & leak
 | Param | Default | What it does |
 |---|---|---|
@@ -196,6 +250,36 @@ Five params per channel `n`:
 | `SERVOn_TRIM` **[R]** | 1500 µs | Servo output when uncommanded. |
 | `SERVOn_FUNCTION` **[i]** | 0 | ArduSub-facing; **not read by SROT** (the role is `SERVOn_ROLE`). QGC Servo-page cosmetic. |
 
+### Calibration backup — `CAL_*` (26 params)
+
+These are **not tuning knobs**. They are a read/write *view* onto `g_state.cal`, exposed
+over MAVLink for one reason: so **Export/Import can back the calibration up**. Without
+them, an NVS wipe loses the accel/mag/level cal and the detected motor directions with no
+way to restore them — and redoing the mag cal means physically spinning the vehicle.
+
+They behave differently from every other parameter, deliberately:
+
+- They persist to **`NVS_NS_CAL`** (via `calibration::saveToNVS()`, flushed off the flight
+  loop), **not** `NVS_NS_PARAMS`. There is exactly one copy of the calibration — mirroring
+  it into the params namespace would create a second source of truth that goes stale the
+  moment a calibration routine runs, and NVS (`0x5000`) has no room to spare.
+- A **`PARAM_DEFAULTS_VER` bump does not touch them.** Wiping a mag cal because a PID
+  default changed would be indefensible.
+- **`PREFLIGHT_STORAGE` param1=2** ("reset to defaults") leaves them alone too — it resets
+  motor directions separately and by design.
+
+| Param | Backs | Notes |
+|---|---|---|
+| `CAL_GYRO_OX/OY/OZ` | `cal.gyro_offset` | rad/s bias, subtracted in `Task_SensorRead`. |
+| `CAL_ACC_OX/OY/OZ`, `CAL_ACC_SX/SY/SZ` | `cal.accel_offset` / `accel_scale` | 6-face accel cal. Scales default to **1**, not 0. |
+| `CAL_MAG_OX/OY/OZ`, `CAL_MAG_SX/SY/SZ` | `cal.mag_offset` / `mag_scale` | Hard/soft iron. Consumed by `yaw_ref` — see *Heading reference*. |
+| `CAL_BARO_Z` | `cal.baro_zero_mbar` | Surface-pressure reference for zero depth. |
+| `CAL_LVL_R`, `CAL_LVL_P` | `cal.level_*_off` | AHRS mounting trim (rad), subtracted from roll/pitch. |
+| `CAL_MDIR1..8` | `cal.motor_dir[0..7]` | Direction found by **MOTOR_DETECT**, ±1. **Multiplies** with `MOTn_DIR` — a bad bench detect silently cancels your parameter change. Written values are clamped to ±1. |
+
+> Prefer re-running the calibration routine over editing these. Hand-editing them is a
+> quick way to break the attitude solution in a way that looks like a hardware fault.
+
 ---
 
 ## B. Informational / not-yet-wired (defined but not read)
@@ -204,6 +288,8 @@ Documented so they aren't mistaken for tuning knobs:
 - `FRAME_CONFIG` (=2) — informational; the mixer matrix is fixed vectored-6DOF.
 - `MOT_PWM_TYPE` / `MOT_PWM_MIN` / `MOT_PWM_MAX` — informational; output is fixed DShot150.
 - `SERVOn_FUNCTION` (all 16) — ArduSub-facing; role comes from `SERVOn_ROLE`.
+- `SYS_PARAM_VER` — reports the build's `PARAM_DEFAULTS_VER`. Forced every boot and read by
+  nothing; it exists to stamp exported files. Writing it does nothing, and Import skips it.
 
 ---
 

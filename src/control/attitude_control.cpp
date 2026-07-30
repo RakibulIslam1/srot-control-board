@@ -52,6 +52,13 @@ void reset() {
     s_yaw_capture_pending = true;   // capture heading on the next centred-stick cycle
 }
 
+void holdYaw(float yaw_rad) {
+    if (!isfinite(yaw_rad)) return;      // a NaN target would poison the hold forever
+    s_yaw_target = wrapPi(yaw_rad);
+    s_yaw_hold   = true;
+    s_yaw_capture_pending = false;       // an explicit target beats "capture on next cycle"
+}
+
 void stabilize(float stick_roll, float stick_pitch, float stick_yaw,
                float meas_roll, float meas_pitch, float meas_yaw,
                float gx, float gy, float gz, float dt,
