@@ -127,10 +127,12 @@ Voltage independence is handled *outside* the attitude loop by two mechanisms �
 | Mechanism | Param | Default | Note |
 |---|---|---|---|
 | Slow per-thruster RPM trim | `THR_TRIM_EN` | **0 (off)** | Learns a bounded gain from measured vs expected RPM. **Enable in water only** — a prop in air spins far faster for the same duty and would drive the gains to their clamps. |
-| Battery-voltage feedforward | `MOT_BAT_V_MAX` | **0 (off)** | Needs the *thruster* pack voltage, which arrives from the 2nd board over ESP-NOW. That link is **not implemented yet**, so this is currently inert. |
+| Battery-voltage feedforward | `MOT_BAT_V_MAX` | **0 (off)** | Needs the *thruster* pack voltage from the 2nd board over ESP-NOW. That link **is implemented** (`env:second-board` + `ESPNOW_EN = 1`); set this to the pack's full-charge voltage and the feedforward goes live. Inert only while either is unset. |
 
-> ⚠️ **Both default OFF.** Until `THR_TRIM_EN = 1` (in water), "3 s @ 50 %" will travel *less*
-> distance on a flat pack than a full one. Budget for this in mission tuning, or enable the trim.
+> ⚠️ **Both default OFF.** With neither enabled, "3 s @ 50 %" travels *less* distance on a flat
+> pack than a full one. Budget for that in mission tuning, or turn one on. `MOT_BAT_V_MAX` is
+> usually the better first move — it needs no water and no learning period, just the 2nd board
+> broadcasting and `ESPNOW_EN = 1`.
 >
 > An earlier revision of this document claimed a closed-loop RPM controller provided this. It did —
 > and it **oscillated**: an RPM setpoint inside the stabilisation loop made a 1° disturbance produce

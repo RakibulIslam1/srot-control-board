@@ -14,8 +14,8 @@ is the *migration plan*; that one is the *interface*.
 
 ## ⚠ 0a. Read this before you design anything
 
-A two-round audit on 2026-07-30 found 22 real defects, several of which change what a companion must
-assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affect **your** design:
+Four audit rounds (2026-07-30 and 2026-07-31) found 29 real defects, several of which change what a
+companion must assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affect **your** design:
 
 1. **The depth PID's sign was inverted, and the SURFACE failsafe drove the vehicle DOWN.** Fixed —
    but the loop had **never run closed**, because the Bar30 was not fitted during development. Treat
@@ -41,11 +41,18 @@ assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affect **your** des
    supervisor must handle an unexpected disarm mid-action.
 7. **`PATTERN` is refused without a depth sensor** (like `DEPTH_HOLD` and `AUTO`), falling back to
    `STABILIZE` with a `STATUSTEXT`. If you drive modes directly, handle the refusal.
-8. **Still outstanding, do not rely on:** the LoRa mission-waypoint upload path has **no CRC** and the
-   radio's PHY CRC is not enabled — it is the one wire protocol in the tree with no corruption
-   detection, so do not use it to carry navigation targets. And the Pico's hardware e-stop line fails
-   *permissive* (a broken wire reads as "run"); it is redundant with two other failsafes, but do not
-   count it as your safety story. Both are documented as deferred in `AUDIT.md`.
+8. **Still outstanding, do not rely on:** the LoRa mission-waypoint upload path has **no application
+   CRC** — it is still the one wire protocol in the tree with no message-level corruption detection,
+   so do not use it to carry navigation targets. (The radio's *PHY* CRC **is** now enabled as of
+   2026-07-31 — `AUDIT.md` R17 — so corrupt frames are dropped at the SX127x. That shrinks the
+   exposure a great deal but does not give the waypoint path a checksum of its own.) And the Pico's
+   hardware e-stop line fails *permissive* (a broken wire reads as "run"); it is redundant with two
+   other failsafes, but do not count it as your safety story. Both remain deferred in `AUDIT.md`.
+9. **Parameters do not survive the current firmware update.** Beyond a `PARAM_DEFAULTS_VER` bump,
+   the NVS partition was **moved and enlarged** (it was physically too small to hold the parameter
+   set, which is why saves had been failing). Bringing a board up to current firmware needs
+   `pio run -t erase` then upload, and **loses both the tune and the `CAL_*` block**. Export from
+   Bondor first — see "Parameter backup" in §9.
 
 ---
 
@@ -181,16 +188,26 @@ Also note `MANUAL_CONTROL` is scaled by the **live pilot gain** (`GAIN`, 0.1..1.
 
 ### 4.2 Modes
 
-| SROT `custom_mode` | Name | duburi_ws equivalent |
-|---|---|---|
-| 0 | STABILIZE | `STABILIZE` |
-| 1 | ACRO | `ACRO` |
-| 2 | DEPTH_HOLD | `ALT_HOLD` |
-| 9 | SURFACE | `SURFACE` |
-| 19 | MANUAL | `MANUAL` |
-| 23 | **AUTO** | *(new — the mode `SROT_MOVE` runs in)* |
+This is the **complete** `FlightMode` enum, not a selection. `HEARTBEAT.custom_mode` can carry any
+of these, so map exhaustively or your state publisher will hit an unknown value.
 
-`SROT_MOVE` auto-switches to AUTO, so you rarely set it explicitly.
+| SROT `custom_mode` | Name | duburi_ws equivalent | Settable by `DO_SET_MODE`? |
+|---|---|---|---|
+| 0 | STABILIZE | `STABILIZE` | yes |
+| 1 | ACRO | `ACRO` | yes |
+| 2 | DEPTH_HOLD | `ALT_HOLD` | yes |
+| 9 | SURFACE | `SURFACE` | yes |
+| 19 | MANUAL | `MANUAL` | yes |
+| 20 | MOTOR_DETECT | — | yes (bench only, props off) |
+| 21 | AUTOTUNE | — | yes |
+| 22 | MOTOR_TUNE | — | yes (bench only, props off) |
+| 23 | **AUTO** | *(new — the mode `SROT_MOVE` runs in)* | yes |
+| 100 | STUNT | — | no — entered by command only |
+| 101 | PATTERN | — | no — entered by command only |
+
+`SROT_MOVE` auto-switches to AUTO, so you rarely set it explicitly. **20, 21, 22, 100 and 101 are
+not modes a mission should ever command**, but a supervisor must still recognise them: seeing one
+mid-mission means something else put the board there, and 20/22 spin motors.
 
 ⚠️ **Without a depth sensor fitted, `DEPTH_HOLD` and `AUTO` are refused** and the board falls back to
 STABILIZE with a `STATUSTEXT`. Handle that rejection rather than assuming the mode took.
@@ -198,6 +215,23 @@ STABILIZE with a `STATUSTEXT`. Handle that rejection rather than assuming the mo
 ### 4.3 The move verb
 
 See `JETSON_COMMS.md` §5 for the full parameter table. The mapping onto `Move.action`:
+
+The `p1` wire type is **not** the internal `movement::Type` — the board adds 1. Send the wire value:
+
+| p1 (send this) | Verb | `movement::Type` |
+|---|---|---|
+| 0 | FWD | 1 |
+| 1 | BACK | 2 |
+| 2 | LEFT | 3 |
+| 3 | RIGHT | 4 |
+| 4 | TURN | 5 |
+| 5 | DIVE | 6 |
+| 6 | STOP | 7 |
+| 7 | HOLD | 8 |
+| 8 | STYLE | 9 |
+| 9 | ARC | 10 |
+
+Anything outside 0..9 is `DENIED`.
 
 | `Move.action` goal field | SROT | Note |
 |---|---|---|
@@ -214,14 +248,30 @@ Feedback → action feedback:
 | SROT | `Move.action` feedback |
 |---|---|
 | `COMMAND_ACK.progress` 0..99 | `current_value` / progress |
-| `MV_STATE` (0 idle,1 cruise,2 brake,3 turn,4 dive,5 style,6 done) | `phase` |
+| `MV_STATE` — see the table below | `phase` |
 | `MV_PROG` 0..1 | progress |
 | terminal `COMMAND_ACK(ACCEPTED, 100)` | `result.success = True` |
 | safety abort → disarm + `STATUSTEXT` | `result.success = False`, `message` |
 
-**Two traps:** a re-sent `SROT_MOVE` **re-runs** (start is edge-triggered on `mv_seq`; there is no
-idempotency key), and a new move **preempts** the running one (no queue). Your action server must
-serialise goals itself.
+`MV_STATE` values, from `movement.cpp`:
+
+| Value | Phase | Value | Phase |
+|---|---|---|---|
+| 0 | IDLE | 4 | DIVE |
+| 1 | CRUISE | 5 | STYLE |
+| 2 | BRAKE | **6** | **HOLD** |
+| 3 | TURN | **7** | **DONE** |
+
+> ⚠️ An earlier version of this table said `6 = done`. It does not — **6 is HOLD and 7 is DONE**.
+> A client using the old mapping reports a hold leg as finished while the vehicle is still holding
+> station. `MV_STATE` is a progress *hint* regardless: the terminal `COMMAND_ACK` is the only
+> authority on completion.
+
+**Three traps:** a re-sent `SROT_MOVE` **re-runs** (start is edge-triggered on `mv_seq`; there is no
+idempotency key); a new move **preempts** the running one (no queue), so your action server must
+serialise goals itself; and `MAV_RESULT_TEMPORARILY_REJECTED` is a **fifth, non-terminal** reply,
+returned when the board could not take the control mutex in time. Retry it — do not treat it as a
+failure, and do not treat it as one of the four terminal results.
 
 ### 4.4 Buttons, payload, params
 
@@ -278,7 +328,10 @@ vision servoing · payload sequencing · logging.
 4. **`manual()`.** Port the `MANUAL_CONTROL` mapping. *Checkpoint: teleop moves the vehicle correctly
    on every axis — verify against `docs/THRUSTER_MAP.md` before trusting any sign.*
 5. **`move()` + the ACK stream.** Wire `SROT_MOVE` into the `/duburi/move` action server for
-   forward/back/strafe/turn/dive/stop/hold. *Checkpoint: each verb runs and reports progress.*
+   forward/back/left/right/turn/dive/stop/hold, plus **arc** (p1 = 9) and **style** (p1 = 8), which
+   earlier revisions of this list omitted. *Checkpoint: each verb runs and reports progress, and
+   all four terminal results resolve the action — test preemption explicitly, it is the one that
+   hangs a naive client.*
 6. **Delete the redundant loops** (`heading_lock`, `motion_easing`, the ALT_HOLD dance).
    *Checkpoint: missions still complete, with less Python.*
 7. **Vision verbs last** — they only need `manual()`, which is already done.
@@ -313,12 +366,50 @@ vision servoing · payload sequencing · logging.
 
 | Gap | Impact |
 |---|---|
-| ESP-NOW thruster-battery link not implemented | `BATTERY_STATUS` id 1 and the voltage feedforward are inert; use the RPM trim for repeatability |
-| No per-thruster current sensing | `CURR` is always 0; no power-based health checks |
+| ESP-NOW thruster-battery link is **off by default** *(no longer missing — see below)* | `BATTERY_STATUS` id 1 and the voltage feedforward stay inert until `ESPNOW_EN = 1` **and** `MOT_BAT_V_MAX` is set |
+| No per-thruster current sensing, and pack current is not calibrated | `ESC_STATUS` current is always 0. Pack `CURR` reads 0 because `BATT_CURR_MULT` is a **compile-time** 0.0 — it is not a parameter, so enabling it needs a firmware rebuild. Note `BATTERY_STATUS.current_battery` reports `-1` (unknown) while `NAMED_VALUE_FLOAT CURR` reports `0.0` |
 | `THR_POLE_PAIRS` is compile-time (7, correct for T200) | A different motor needs a firmware rebuild |
 | `STYLE` is always a roll at 90°/s | Not selectable |
 | Mission protocol (`MISSION_*`) is handled but minimal | Prefer `SROT_MOVE` sequencing from ROS |
 | **Yaw is RELATIVE unless `MAG_YAW_REF = 1`** | An arbitrary power-on zero drifting ~0.5–3 °/min. Heading *hold* is unaffected (it tracks a target in the same frame), but **absolute `TURN` (`p4 = 1`) is only meaningful with the reference on**, and headings are not comparable between dives. See below |
+
+### The thruster pack is now a real source — what changed on 2026-07-31
+
+This section used to say the ESP-NOW link was "not implemented". It is, end to end, and that
+changes two pieces of advice above:
+
+- `env:second-board` is a real firmware (`src/second_board/`) that broadcasts the thruster-pack
+  voltage. The flight controller receives it (`drivers/espnow_link`), and `BATTERY_STATUS` **id 1
+  is emitted** whenever the link is fresh. It is *absent*, never zero, when the link is down —
+  so "no id 1 for >2 s" means no data, not a flat pack.
+- The mixer's **battery-voltage feedforward is wired to it** (`MOT_BAT_V_MAX`), so a timed move
+  travels the same distance on a full or a flat pack. That is now the primary mechanism for
+  repeatable distance; the RPM trim (`THR_TRIM_EN`) is complementary, not the fallback.
+- There is a **low-thruster-battery failsafe** (`FS_BAT_VOLTAGE`, debounced by `FS_BAT_HOLD_MS`)
+  that was inert before this link existed and is live once `ESPNOW_EN = 1`. Your supervisor can
+  now be surfaced by a flat *thruster* pack, not just a flat electronics pack.
+
+Both are **off by default** (`ESPNOW_EN = 0`, `MOT_BAT_V_MAX = 0`). Enabling them is a
+configuration step, not a firmware change.
+
+Two related parameter changes that will bite an old `.params` file: `PM1_VMULT` changed units
+(volts-per-count → divider ratio, ~11) and `PM2_VMULT` went from inert to a live trim on the
+ESP-NOW voltage, with a one-shot migration at boot. A backup taken before 2026-07-31 will report
+wrong battery voltages until both are recalibrated.
+
+### STATUSTEXT strings worth matching
+
+The board says things a supervisor should react to rather than discover. Beyond the mode-refusal
+and yaw-alignment messages named elsewhere in this document:
+
+| Message | Means |
+|---|---|
+| `"ESPNOW_EN=0 - no thruster-pack voltage (set it to 1)"` | at boot; Battery 2 and the voltage feedforward will stay inert |
+| `"ESP-NOW started"` / `"ESP-NOW init failed - retrying"` | the thruster-pack link came up, or the radio will not initialise |
+| `"Params reset to build defaults"` | the tune is gone — this is not the vehicle you calibrated |
+| `"NVS reformatted - params AND calibration lost, re-import"` | worse: the `CAL_*` block went too |
+| `"<NAME> set but NOT saved (NVS full?)"` | a `PARAM_SET` applied live but will not survive a reboot |
+| `"PM2_VMULT migrated to 1.0 (it is now an ESP-NOW trim)"` | one-shot units migration ran on this boot |
 
 ### The yaw reference, in detail — this one will affect your design
 
@@ -367,3 +458,13 @@ up reporting `"Params reset to build defaults"` is flyable but *not* the vehicle
 Board-side reference: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`ALGORITHMS.md`](ALGORITHMS.md) ·
 [`HARDWARE.md`](HARDWARE.md) · [`PARAMETERS.md`](PARAMETERS.md) ·
 [`docs/THRUSTER_MAP.md`](docs/THRUSTER_MAP.md) · [`docs/T200_PROFILE.md`](docs/T200_PROFILE.md)
+
+Two documents are specifically about this integration and are not linked above:
+
+- [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) — findings sent to the firmware team *by* the companion
+  team, ranked by what blocks them. Read it before filing anything.
+- [`VISION_API.md`](VISION_API.md) — a **specification, not an implementation**. It proposes moving
+  the vision servo loop on-board (bearings in, 500 Hz loop on the board), which would contradict §2
+  and §6 of this document. None of it is in the firmware today: there is no `LANDING_TARGET`,
+  `VISION_POSITION_ESTIMATE`, `DISTANCE_SENSOR` or `ODOMETRY` handling. Until that changes, **the
+  vision servo stays in Python** exactly as §2 says.
