@@ -45,11 +45,25 @@ void Task_MAVLink(void* pv) {
     }
     // PM1_VMULT changed units (volts-per-count -> divider ratio) when the battery reading
     // moved to the calibrated ADC path. A backup written before that change carries the old
-    // value; applying it as a ratio would report ~0 V on a healthy pack. read() substitutes
-    // the default, and this says so rather than leaving a plausible-looking wrong number.
+    // value; applying it as a ratio reports ~0 V on a healthy pack. The value is APPLIED
+    // either way (see analog_mon::read) — this is advice, not a rejection.
     if (analog_mon::voltMultLooksStale(g_params.pm1_vmult)) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
-                                   "PM1_VMULT is stale (now a divider ratio) - recalibrate");
+                                   "PM1_VMULT looks stale (it is a divider ratio, ~11)");
+    }
+    // PM2_VMULT was rewritten from the old volts-per-count units to the new trim. Announced
+    // because it silently changes a number the operator may have set by hand.
+    if (params::pm2VmultMigrated()) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "PM2_VMULT migrated to 1.0 (it is now an ESP-NOW trim)");
+    }
+    // The thruster-pack voltage exists ONLY over ESP-NOW. With ESPNOW_EN = 0 the OLED shows
+    // OFF, Battery 2 stays empty, and both the mixer's voltage linearisation and the
+    // low-thruster-battery failsafe are inert — all of which look like faults if you do not
+    // know the link was never switched on. Say so once at boot instead.
+    if (g_params.espnow_en <= 0.5f && (int)g_params.pm2_src == 2) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "ESPNOW_EN=0 - no thruster-pack voltage (set it to 1)");
     }
 
     for (;;) {

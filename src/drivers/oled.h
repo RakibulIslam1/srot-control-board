@@ -31,6 +31,11 @@ struct View {
     float   curr;        // battery current (A)
     uint16_t param_n, param_total; // param-download progress (0/0 = idle)
     bool    pm1_present, pm2_present; // power modules reporting (else show "--")
+    // PM2's source is switched OFF (PM2_SRC = 0, or PM2_SRC = 2 with ESPNOW_EN = 0), as
+    // opposed to selected-but-not-reporting. Both used to render as "--", so a link that had
+    // never been enabled was indistinguishable from one that was enabled and failing — and
+    // the fix for each is the opposite of the other. "OFF" means "you turned this off".
+    bool    pm2_src_off;
     bool    baro_ok;     // Bar30 giving fresh readings (else "NC" in the depth box)
     bool    pca_ok;      // PCA9685 payload-servo extender ACKs on I2C
     // Connectivity (network indicators)

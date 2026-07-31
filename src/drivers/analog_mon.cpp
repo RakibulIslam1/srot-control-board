@@ -39,16 +39,22 @@ static float readAvgMv(uint8_t pin) {
 // PM1_VMULT changed meaning with the switch above: it is now the resistor-divider RATIO
 // (battery volts per volt at the pin, e.g. ~11 for a 16.8 V pack into a 3.3 V input), not
 // volts-per-ADC-count (~0.009). An imported .params file written before that change carries
-// the old value, and silently applying ~0.009 as a ratio would report a flat battery on a
-// full pack. Anything below this is therefore treated as "not yet configured": fall back to
-// the default and say so, rather than display a number that is wrong by three orders of
-// magnitude.
+// the old value, and applying ~0.009 as a ratio reports a flat battery on a full pack.
+//
+// This used to SILENTLY SUBSTITUTE DEF_PM1_VMULT for anything below the threshold. That was
+// wrong twice over: a value below 0.5 is a legitimate setting for a hardware divider this
+// firmware does not know about, and — worse — the substitution made calibration impossible
+// to perform. Every small value typed was discarded with no message outside a boot-time
+// warning, so the reading never moved and the user could not tell whether the parameter had
+// even been received. The value set is now ALWAYS the value used; the threshold survives
+// only as a warning, which task_mavlink emits on set as well as at boot.
 static const float MIN_PLAUSIBLE_RATIO = 0.5f;
 
 bool voltMultLooksStale(float volt_mult) { return !(volt_mult >= MIN_PLAUSIBLE_RATIO); }
 
 void read(Sample& out, float volt_mult, float curr_mult, bool leak_enable) {
-    const float ratio = voltMultLooksStale(volt_mult) ? DEF_PM1_VMULT : volt_mult;
+    // NaN would propagate into the failsafe comparisons; 0 or negative is never a divider.
+    const float ratio = (volt_mult > 0.0f) ? volt_mult : DEF_PM1_VMULT;
     out.volt = (readAvgMv(s_volt_pin) / 1000.0f) * ratio;
     // Current is left on raw counts: its multiplier is sensor-specific and uncalibrated
     // either way, and CURR is display-only (no failsafe consumes it).

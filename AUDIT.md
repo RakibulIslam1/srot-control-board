@@ -2,6 +2,164 @@
 
 ---
 
+# Round 4 (2026-07-31) — the LoRa link, and two parameters that could not be tuned
+
+From a second field report: the mode display flickers to a wrong value for well under a second,
+attitude "goes missing", parameter saves work sometimes and not others, the thruster voltage in
+Bondor never changes, the OLED always shows `--`, and changing `PM1`/`PM2` multipliers does
+nothing visible.
+
+Six separate defects. The first is the substrate under most of the LoRa symptoms.
+
+## R17 — the SX127x hardware CRC was never enabled, on either radio
+
+`RxPayloadCrcOn` is **0 at power-on**, and `LoRa.enableCrc()` — present in the vendored library —
+was called nowhere. The radio therefore handed **corrupted payloads straight up**: into
+`mavlink_parse_char()` on the uplink and into the `LoraTelem` decoder on the downlink.
+
+MAVLink's own CRC rejects the damaged message, so this does not produce *wrong* commands. It
+produces **missing** ones: garbage bytes desynchronise the parser, so the next one or two *good*
+messages are consumed as the tail of a bogus frame and lost too. One corrupt packet costs several
+good ones. That is the mechanism behind both "misses the attitude" and "the parameter save is not
+reliable" — the same corruption, on the two directions of the same link.
+
+Fixed in `src/drivers/lora_mission.cpp` and `src/groundstation/main.cpp`. Explicit-header mode
+carries a CRC-present flag so this is self-describing, but a receiver without it still accepts a
+corrupt frame: **both boards must be reflashed together.**
+
+## R18 — the ground station announced STABILIZE before it had heard anything
+
+`s_last_mode` initialised to **0**, which is `STABILIZE` — not a neutral value — and the
+synthesised keep-alive heartbeat fired as soon as `now - s_last_frame_ms > 1000`, which is true
+from boot. Powering the bridge up before the vehicle therefore told Bondor "STABILIZE, disarmed"
+with full confidence, before a single frame had been received. The file's own comment promised
+"never send fabricated 0/false to Bondor"; the initialiser contradicted it.
+
+Separately, `t.mode` was copied into the heartbeat **with no range check**, so any frame that
+slipped the CRC16 could paint an arbitrary mode for one frame — ~125 ms, which is exactly the
+"wrong mode for less than a second" that was reported.
+
+Fixed: `s_have_state` gates the keep-alive, and `modeIsKnown()` rejects unrecognised mode bytes
+and keeps the previous value. Everything else in a frame is still used — a bad mode byte does not
+invalidate the attitude beside it.
+
+## R19 — the uplink queue dropped parameter writes silently
+
+The TDM scheme carries **one uplink packet per received downlink slot** (~8/s at 120 ms pacing).
+Bondor paced writes on `status.kind === 'serial'` — and the LoRa bridge **is** a USB serial port
+to Bondor, indistinguishable by link kind — so it fired ~20 writes/s into an 8/s pipe. The ground
+station's 24-deep queue overflowed and `ulqPush()` dropped the excess with no counter and no
+message (`if (!ulqFull())`, no `else`). "Sometimes it saves and sometimes it doesn't" was that,
+exactly.
+
+Fixed at both ends:
+- Ground station counts drops and streams `UL_DROP` alongside the existing `USB_RX`/`UP_TX`/`UL_RX`
+  named values. It must read 0 during a parameter import.
+- Bondor detects the bridge by the `LORA_RSSI`/`LORA_RX` named values that only the ground station
+  emits — no protocol change — and paces to ~3.3 writes/s with a longer settle, leaving headroom
+  for the `PARAM_VALUE` confirm-and-retry to work instead of being swamped.
+
+Also made mode/arm commands **last-wins** in the uplink queue. Those are sent 3× for loss
+tolerance, and the replay is unconditional, so a quick disarm-then-arm could replay the **disarm
+after the arm**. Not a symptom that was reported — the flicker was display-only — but it is a real
+hazard on its own merits.
+
+## R20 — the thruster voltage was structurally unreachable over LoRa
+
+`LoraTelem` had **no thruster-pack field**. `batt_mv` is `pm1_voltage`, the *electronics* pack, and
+the ground station emits only `SYS_STATUS`, which carries one voltage that any GCS maps to Battery
+1. So over LoRa there was no path by which the thruster voltage could arrive, no matter how healthy
+the ESP-NOW link was. What was being watched in Bondor was PM1 the whole time — and PM1 looked
+frozen for the separate reason in R21.
+
+Fixed by adding `aux_mv` (uint16 mV) to the frame, filled from `pm2_voltage` and **0 when not
+fresh**, with the ground station emitting `BATTERY_STATUS` id 1 at 1 Hz to match the USB path.
+
+**Co-owned wire change** (`AGENTS.md` rule 1): the struct is duplicated in both repos and the frame
+grows 39 → 41 bytes. The receiver requires an exact size match, so a mismatched pair does not
+corrupt — the link goes **silent**, which looks exactly like being out of range. Reflash both.
+
+## R21 — my own PM1_VMULT guard made the parameter impossible to calibrate
+
+R16 changed `PM1_VMULT` from volts-per-ADC-count to a divider ratio and added a guard that
+**silently substituted the default** for anything below 0.5, warning only at boot. The intent was
+to protect against an imported pre-change value. The effect was that every small value typed was
+discarded in silence: the reading never moved, and there was no way to tell a rejected value from
+one that had never arrived. A parameter you cannot observe responding is a parameter you cannot
+calibrate.
+
+It was also wrong on the merits — a ratio below 0.5 is a legitimate setting for a divider this
+firmware does not know about.
+
+Fixed: the value set is the value used (only ≤ 0 or NaN falls back). The threshold survives as a
+**warning only**, now emitted **when the parameter is set** as well as at boot, because
+calibration is an interactive loop and advice that appears only at startup arrives too late.
+
+## R22 — PM2_VMULT was in the table, echoed, and persisted, but read by nothing
+
+`pm2_voltage` came straight from the ESP-NOW aux voltage; `g_params.pm2_vmult` appeared in no
+expression anywhere in the firmware. It was documented as inert in `PARAMETERS.md` §B, which is
+honest but not sufficient: from the GCS it looked exactly like a live parameter — it accepted
+values, echoed them and stored them — so "I change it and see no effect" was the only possible
+experience. It is the other half of the report.
+
+Fixed by making it live as a **trim on the ESP-NOW voltage** (1.0 = as reported), applied at the
+single ingest point so the OLED, Battery 2, the `FS_BAT_*` failsafe, the mixer's voltage
+linearisation and the new LoRa `aux_mv` can never disagree about the pack voltage. This lets the
+thruster reading be calibrated from the GCS without reflashing the 2nd board.
+
+The units change is handled by a **one-shot migration**, not a clamp: a stored value below 0.05
+cannot be a trim, so it is rewritten to 1.0 in NVS and announced. Writing it back matters — a clamp
+at the point of use would leave the param list showing `0.009` while the code used `1.0`, which is
+precisely the failure mode of R21. No `PARAM_DEFAULTS_VER` bump; that would wipe an entire tune to
+fix one row.
+
+## R23 — `--` on the OLED meant three different things
+
+The thruster-voltage box showed `--` for "`ESPNOW_EN` = 0", for "`espnow_link::begin()` failed",
+and for "no packets arriving" — three causes whose fixes are unrelated. Worse, `begin()` was
+retried **every loop (20 Hz), for ever, with its failure never reported**, so a radio that could
+not initialise was indistinguishable from one with nothing transmitting to it.
+
+Fixed: the OLED shows `OFF` when the source is switched off and `--` only when it is enabled but
+not fresh; a boot `STATUSTEXT` says so when `ESPNOW_EN = 0` with `PM2_SRC = 2`; and `begin()` backs
+off to 2 s and reports failure on the first attempt and every ~30 s after. `--` now always has an
+explanation available.
+
+(Fixing the retry cadence also removed a 20 Hz WiFi-init call from the Core-0 comms task.)
+
+## Found by review of this round's own changes — before any of it shipped
+
+Two defects in the fixes above, caught by an adversarial pass over the working tree.
+
+**R22a — I reimplemented R21's mistake in the same commit that declared it wrong.** The PM2_VMULT
+migration was gated on the *value* (`pm2_vmult < 0.05`), which is not a one-shot condition: it
+re-evaluates every boot. An operator who deliberately set a small trim after the migration would
+have it silently overwritten on the next power cycle — and overwritten **in NVS**, which is
+strictly worse than the point-of-use substitution R21 removed, because it destroys the stored
+value rather than ignoring it. Three paragraphs above it, I had written that exact reasoning down
+as the thing not to do.
+
+Fixed by gating on a persistent marker (`NVS_KEY_PM2_MIGRATED`) instead of the value, so it runs
+once per board and every value set afterwards is the operator's to keep. Also added the set-time
+warning for `PM2_VMULT` that R21 added for `PM1_VMULT` — it had been left out, so a small PM2
+value was accepted with no comment at all and then quietly reverted at the next boot.
+
+**R19a — the LoRa detection sampled the one moment it is guaranteed to be wrong.** `overLora` was
+read once at the top of `writeParams()`. But `LORA_RSSI`/`LORA_RX` only start flowing after the
+bridge decodes its **first downlink frame** — so importing parameters with the bridge plugged in
+and the vehicle not yet powered, which is the ordinary pre-dive order of operations, saw an empty
+`named`, chose the **fast profile**, and reproduced the exact overrun R19 exists to prevent. It was
+also never re-evaluated, so telemetry appearing mid-import changed nothing.
+
+Fixed by re-reading the profile before every batch, and by treating "no telemetry at all" as LoRa
+rather than as USB: a directly-connected board streams its own named values within ~500 ms, so an
+empty `named` means nothing has been heard from and the fast link must not be assumed. The
+asymmetry is deliberate — guessing slow on a fast link costs a minute on an import that succeeds;
+guessing fast on a slow link loses parameters.
+
+---
+
 # Round 3 (2026-07-30) — parameter persistence: the partition was too small all along
 
 Found from a field report ("parameter set but NOT saved (NVS full?)" over both USB and LoRa,

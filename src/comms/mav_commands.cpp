@@ -9,6 +9,7 @@
 #include "control/arming.h"
 #include "control/calibration.h"
 #include "control/movement.h"
+#include "drivers/analog_mon.h"   // voltMultLooksStale() — PM1_VMULT advisory on set
 #include "config.h"
 #include "state_types.h"
 
@@ -566,6 +567,25 @@ static void onParamSet(const mavlink_message_t& msg) {
         // Pin assignments only take effect after a reboot (ArduPilot-style).
         if (strncmp(name, "PIN_", 4) == 0) {
             mav_stream::sendStatusText(MAV_SEVERITY_WARNING, "Pin changed - reboot required");
+        }
+        // PM1_VMULT is a divider RATIO (~11), not the old volts-per-count (~0.009). The value
+        // is applied as typed — this only says it looks like the old units. Warning HERE and
+        // not just at boot is the point: calibration is an interactive loop (type a value,
+        // watch the voltage), so advice that only appears at startup arrives too late to use.
+        if (strncmp(name, "PM1_VMULT", 16) == 0 && analog_mon::voltMultLooksStale(ps.param_value)) {
+            char wb[72];
+            snprintf(wb, sizeof(wb), "PM1_VMULT=%.4f applied, but a divider ratio is ~11",
+                     (double)ps.param_value);
+            mav_stream::sendStatusText(MAV_SEVERITY_WARNING, wb);
+        }
+        // Same courtesy for PM2_VMULT, whose units also changed. Applied and KEPT — the
+        // boot-time migration is one-shot and has already run, so a small value set now is
+        // deliberate and survives the next power cycle.
+        if (strncmp(name, "PM2_VMULT", 16) == 0 && ps.param_value < PM2_VMULT_LEGACY_MAX) {
+            char wb[72];
+            snprintf(wb, sizeof(wb), "PM2_VMULT=%.4f applied, but a trim is ~1.0",
+                     (double)ps.param_value);
+            mav_stream::sendStatusText(MAV_SEVERITY_WARNING, wb);
         }
         sendParamByName(name);   // echo the accepted value
     }

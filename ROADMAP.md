@@ -4,12 +4,16 @@ Where the project is going (and why), the sourced research behind each decision,
 chronological progress log. Architecture: `ARCHITECTURE.md`; hardware: `HARDWARE.md`;
 parameters: `PARAMETERS.md`.
 
-## Status (2026-07-26)
-Core firmware complete + full-audit-hardened. QGC/BlueOS ArduSub compatibility working
+## Status (2026-07-31)
+Core firmware complete + four audit rounds deep. QGC/BlueOS ArduSub compatibility working
 (Motor Test, sensor cal, live Tuning). **Phase 1** precision control shipped. **Phase 2b**
-(Pico 2 thruster + RPM co-processor) Stages 1–2 built — awaiting bench bring-up. Both boards
-build from one project (`pio run` / `pio run -e pico`). **Next:** Phase 2a (model-based
-control), then Phase 2c (BlueOS/Jetson autonomy).
+(Pico 2 thruster + RPM co-processor) Stages 1–2 built — awaiting bench bring-up. Three boards
+build from one project (`pio run` / `-e pico` / `-e second-board`). **Next:** Phase 2a
+(model-based control), then Phase 2c (BlueOS/Jetson autonomy).
+
+> **This build changes the LoRa air format.** Both LoRa boards — the vehicle and the ground
+> station — must be reflashed together, or the link stays silent. See the progress-log entry
+> below and `AUDIT.md` R17/R20.
 
 ---
 
@@ -158,6 +162,27 @@ default 0/off → unchanged until tuned; math in `ALGORITHMS.md §5`):
 > — `context.md`/`memory.md` → `ARCHITECTURE.md` + `HARDWARE.md`; `CONTROL_LOOP.md`/
 > `tuning_guide.md` → `ARCHITECTURE.md`; `WIRING.md` → `HARDWARE.md`; `plan.md`/
 > `ideas_and_progress.md` → this file; `pico_thruster/` → `src/pico/`.
+
+### 2026-07-31 — The LoRa link had no CRC, and two parameters could not be tuned
+
+Round 4 of the audit — see `AUDIT.md` R17–R23. Seven defects from a second field report.
+
+The headline: **the SX127x hardware CRC was never enabled on either radio.** `RxPayloadCrcOn` is 0
+at power-on and `LoRa.enableCrc()` was called nowhere, so corrupt payloads went straight into the
+MAVLink parser. MAVLink's own CRC rejects the bad message, but the parser is already desynchronised
+by then, so the next good messages are eaten too — one corrupt packet costs several. "Misses the
+attitude" and "parameter saves are unreliable" were the same fault seen from the two ends of the
+link.
+
+Also fixed: the ground station announced `STABILIZE` before it had received anything; the uplink
+queue dropped writes silently when Bondor paced a LoRa hop as if it were USB; the thruster voltage
+had no field in the LoRa frame at all, so it was structurally unreachable over radio; `PM1_VMULT`
+silently discarded small values, making it impossible to calibrate; `PM2_VMULT` was read by no code
+whatsoever; and the OLED's `--` meant three unrelated things at once.
+
+**Flash both LoRa boards together.** The frame grew 39 → 41 bytes for the new `aux_mv` field, and
+the CRC change is not backward-compatible. A mismatched pair fails safe — the link goes silent
+rather than passing corruption — but it does go silent.
 
 ### 2026-07-30 — Parameters never persisted: the NVS partition was too small all along
 
