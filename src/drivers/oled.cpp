@@ -98,7 +98,11 @@ void render(const View& v) {
     // ---- Top row: PM2 box (left) · SROT box (centre) · PM1 box (right) ----
     s_disp.drawRoundRect(0, 0, 30, 11, 2, SH110X_WHITE);
     s_disp.setCursor(2, 2);
-    if (v.pm2_present) s_disp.printf("%.1f", v.pm2); else s_disp.print("--");
+    // "OFF" = the source is disabled, "--" = enabled but no fresh data. Distinct on purpose:
+    // "--" alone could not tell "ESPNOW_EN is 0" from "the 2nd board is not transmitting".
+    if (v.pm2_present)      s_disp.printf("%.1f", v.pm2);
+    else if (v.pm2_src_off) s_disp.print("OFF");
+    else                    s_disp.print("--");
     s_disp.drawRoundRect(49, 0, 30, 11, 3, SH110X_WHITE);   // centred on x64
     s_disp.setCursor(52, 2);  s_disp.print("SROT");
     s_disp.drawRoundRect(98, 0, 30, 11, 2, SH110X_WHITE);

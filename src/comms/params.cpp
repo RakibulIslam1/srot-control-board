@@ -380,6 +380,9 @@ int pinOr(float value, int fallback, bool output) {
 // True when init() had to reformat NVS because it was unreadable — reported to the GCS.
 static bool s_nvs_was_reformatted = false;
 
+// True when init() rewrote a legacy PM2_VMULT to the new trim units — reported to the GCS.
+static bool s_pm2_vmult_migrated = false;
+
 void init() {
     buildTable();
 
@@ -426,6 +429,30 @@ void init() {
         }
     }
     if (force_defaults) s_prefs.putUInt(NVS_KEY_DEFAULTS_VER, (uint32_t)PARAM_DEFAULTS_VER);
+
+    // One-shot PM2_VMULT units migration. It used to be volts-per-ADC-count (~0.009) and was
+    // read by no code at all; it is now the ESP-NOW aux-voltage TRIM (1.0 = as reported), so a
+    // board carrying the old stored value would suddenly scale the thruster pack to ~0.15 V —
+    // which would trip the low-thruster-battery failsafe on a full pack.
+    //
+    // Migrated rather than clamped at the point of use: the corrected value is WRITTEN BACK,
+    // so the number in the param list is the number in force. A clamp would leave the list
+    // showing 0.009 while the code used 1.0, which is how PM1_VMULT became untunable.
+    // No PARAM_DEFAULTS_VER bump — that would wipe the operator's entire tune for one row.
+    //
+    // Gated on a persistent MARKER, not on the value. Keying the migration off "value < 0.05"
+    // would re-fire on every boot, so a small trim the operator deliberately set afterwards
+    // would be silently overwritten — and overwritten IN NVS, which is strictly worse than
+    // the PM1_VMULT substitution this round removed. The marker runs it exactly once per
+    // board, after which any value the operator sets is theirs to keep.
+    if (s_prefs.getUChar(NVS_KEY_PM2_MIGRATED, 0) == 0) {
+        if (!force_defaults && g_params.pm2_vmult < PM2_VMULT_LEGACY_MAX) {
+            g_params.pm2_vmult = DEF_PM2_VMULT;
+            s_prefs.putFloat("PM2_VMULT", DEF_PM2_VMULT);
+            s_pm2_vmult_migrated = true;
+        }
+        s_prefs.putUChar(NVS_KEY_PM2_MIGRATED, 1);
+    }
     s_prefs.end();
 
     s_defaults_were_forced = force_defaults;   // reported once the MAVLink link is up
@@ -440,6 +467,8 @@ void init() {
 bool defaultsWereReset() { return s_defaults_were_forced; }
 
 bool nvsWasReformatted() { return s_nvs_was_reformatted; }
+
+bool pm2VmultMigrated() { return s_pm2_vmult_migrated; }
 
 void resetAllToDefaults() {
     s_prefs.begin(NVS_NS_PARAMS, false);

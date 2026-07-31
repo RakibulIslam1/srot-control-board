@@ -50,6 +50,17 @@ static bool tryBegin() {
         LoRa.setSignalBandwidth(LORA_BW);     // must match the ground station
         LoRa.setSpreadingFactor(LORA_SF);
         LoRa.setCodingRate4(LORA_CR);
+        // Hardware payload CRC. The SX127x powers up with RxPayloadCrcOn = 0, so until this
+        // was added the radio handed CORRUPTED packets straight to mavlink_parse_char() and
+        // to the telemetry decoder. MAVLink's own CRC rejects the bad message, but the
+        // damage is already done: the corrupt bytes desynchronise the parser, so the NEXT
+        // few good messages are lost too. That is what "the link misses attitude" and
+        // "parameter saves are unreliable" were made of.
+        //
+        // Explicit-header mode carries a CRC-present flag, so this is self-describing — but
+        // a receiver without it will still accept a corrupt frame, so BOTH boards must be
+        // reflashed together (see the ground station, which enables it identically).
+        LoRa.enableCrc();
         LoRa.receive();                       // enter continuous RX
         return true;
     }

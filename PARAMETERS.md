@@ -44,8 +44,9 @@ If you skip the erase, the firmware detects the unreadable NVS, reformats it onc
 `"NVS reformatted - params AND calibration lost, re-import"` as a CRITICAL message. You still need
 step 4.
 
-> `PM1_VMULT` **changed units** in this build — see the Battery section. An imported pre-change value
-> is detected and reported rather than silently applied.
+> `PM1_VMULT` and `PM2_VMULT` **changed units** — see the Battery section. `PM1_VMULT` applies
+> whatever you set and warns if it looks like the old units; `PM2_VMULT` is now live (it used to be
+> read by nothing) and a stored pre-change value is migrated to 1.0 once, with a `STATUSTEXT`.
 
 ## ⚠ Back your parameters up before you reflash
 
@@ -206,8 +207,8 @@ success *and* refusal — is announced over `STATUSTEXT`.
 |---|---|---|
 | `PM1_SRC` **[R]** | 1 | Battery-1 source: 0 = off, 1 = local ADC (GPIO36), 2 = ESP-NOW aux. → BATTERY_STATUS id 0. |
 | `PM2_SRC` **[R]** | 2 | Battery-2 source (same codes). → BATTERY_STATUS id 1. |
-| `PM1_VMULT` **[R]** | **11.28** | **Divider RATIO** — battery volts per volt at the pin. **Units changed** (was 0.009088 volts-per-ADC-count): the reading now comes from `analogReadMilliVolts()`, which applies the chip's factory ADC calibration and removes the 11 dB attenuation non-linearity that no single multiplier could compensate — the reason the reported pack voltage was wrong. A value **below 0.5** is detected as a stale pre-change setting, replaced by the default, and reported over `STATUSTEXT`. **Calibrate:** `PM1_VMULT_new = PM1_VMULT_now × (multimeter ÷ reported)`, ideally checked at two different pack voltages so a scale error is distinguishable from an offset. |
-| `PM2_VMULT` **[i]** | 0.009088 | **Not read** — PM2 is ESP-NOW aux, already scaled upstream. |
+| `PM1_VMULT` **[R]** | **11.28** | **Divider RATIO** — battery volts per volt at the pin. **Units changed** (was 0.009088 volts-per-ADC-count): the reading now comes from `analogReadMilliVolts()`, which applies the chip's factory ADC calibration and removes the 11 dB attenuation non-linearity that no single multiplier could compensate — the reason the reported pack voltage was wrong. **Whatever you set is applied** (only ≤ 0 falls back to the default); a value below 0.5 gets a `STATUSTEXT` warning, at boot *and* when you set it, but it is still used. **Calibrate:** `PM1_VMULT_new = PM1_VMULT_now × (multimeter ÷ reported)`, ideally checked at two different pack voltages so a scale error is distinguishable from an offset. |
+| `PM2_VMULT` **[R]** | **1.0** | **Trim on the ESP-NOW thruster-pack voltage** — 1.0 = report exactly what the 2nd board sends. **Now live** (it was previously read by no code at all, so changing it had no effect) and **units changed** from the old 0.009088 volts-per-count. A stored value below 0.05 is migrated to 1.0 once at boot and announced over `STATUSTEXT` — a real write, so the param list shows the value actually in force. **Calibrate:** `PM2_VMULT_new = PM2_VMULT_now × (multimeter ÷ reported)`. Applied at the ESP-NOW ingest point, so the OLED, Battery 2, the `FS_BAT_*` failsafe, the mixer's voltage linearisation and the LoRa `aux_mv` field all use the same trimmed number. |
 | `LEAK_EN` **[R]** | 0 | Enable leak-sensor read + leak failsafe (real; not the compat `FS_LEAK_ENABLE`/`LEAK1_*`). |
 
 ### Failsafe & arming (real ones)
@@ -340,7 +341,6 @@ They behave differently from every other parameter, deliberately:
 
 ## B. Informational / not-yet-wired (defined but not read)
 Documented so they aren't mistaken for tuning knobs:
-- `PM2_VMULT` — PM2 is ESP-NOW aux (pre-scaled); unused.
 - `FRAME_CONFIG` (=2) — informational; the mixer matrix is fixed vectored-6DOF.
 - `MOT_PWM_TYPE` / `MOT_PWM_MIN` / `MOT_PWM_MAX` — informational; output is fixed DShot150.
 - `SERVOn_FUNCTION` (all 16) — ArduSub-facing; role comes from `SERVOn_ROLE`.

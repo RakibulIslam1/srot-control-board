@@ -150,6 +150,12 @@ bool defaultsWereReset();
 // to the GCS so it is never silent.
 bool nvsWasReformatted();
 
+// True if init() rewrote a stored PM2_VMULT from the old volts-per-ADC-count units to the new
+// aux-voltage trim (1.0 = as reported by the 2nd board). One-shot and persisted, so the value
+// shown in the param list is the value in force. Reported to the GCS because it changes a
+// number the operator may have set by hand.
+bool pm2VmultMigrated();
+
 // Restore every parameter to its config.h default and persist. Exposed via
 // MAV_CMD_PREFLIGHT_STORAGE param1 = 2 (ArduPilot's "reset to defaults" convention).
 void resetAllToDefaults();

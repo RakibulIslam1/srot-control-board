@@ -46,6 +46,8 @@ void Task_LoRa_SD(void* pv) {
     // ESP-NOW / WiFi is started at runtime only when ESPNOW_EN=1 (keeps WiFi off
     // the MAVLink core until the user opts in).
     bool espnow_started = false;
+    uint32_t espnow_try_ms = 0;   // backoff timer for espnow_link::begin() retries
+    uint32_t espnow_fail_n = 0;   // consecutive failures (throttles the STATUSTEXT)
 
     uint32_t log_last = 0;
     uint32_t stk_cnt = 0;
@@ -77,6 +79,10 @@ void Task_LoRa_SD(void* pv) {
                     t.yaw_cd   = (int16_t)(x.yaw   * 5729.578f);
                     t.depth_cm = (int16_t)(x.depth_m * 100.0f);
                     t.batt_mv  = (uint16_t)(x.pm1_voltage * 1000.0f);
+                    // Thruster pack, relayed from the 2nd board over ESP-NOW. Send 0 rather
+                    // than a stale number when the link is not fresh, so the ground station
+                    // can show "no data" instead of a value frozen at whatever arrived last.
+                    t.aux_mv   = x.pm2_present ? (uint16_t)(x.pm2_voltage * 1000.0f) : 0;
                     t.curr_ca  = (int16_t)(x.curr_a * 100.0f);
                     t.wtemp_c  = (int8_t)x.water_temp_c;
                     if (x.leak)        t.flags |= LT_FLAG_LEAK;
@@ -127,8 +133,20 @@ void Task_LoRa_SD(void* pv) {
         mav::loraTapEnable((now - s_last_uplink_ms) < 3000);
 
         // --- ESP-NOW: start on demand, then read thruster-kill + aux voltage. ---
-        if (!espnow_started && g_params.espnow_en > 0.5f) {
+        // begin() was retried every loop (20 Hz) and its failure never reported, so a radio
+        // that could not initialise produced exactly the same symptom as one with nothing
+        // transmitting to it: a permanent "--". Back off to 2 s and say so on the first
+        // failure and every ~30 s after, so the OLED "--" always has an explanation.
+        if (!espnow_started && g_params.espnow_en > 0.5f && (now - espnow_try_ms >= 2000)) {
+            espnow_try_ms = now;
             espnow_started = espnow_link::begin();
+            if (espnow_started) {
+                mav_stream::queueStatusText(MAV_SEVERITY_INFO, "ESP-NOW started");
+                espnow_fail_n = 0;
+            } else if (espnow_fail_n++ % 15 == 0) {
+                mav_stream::queueStatusText(MAV_SEVERITY_ERROR,
+                                           "ESP-NOW init failed - retrying");
+            }
         }
         if (espnow_started) {
             bool kill, fresh; float aux_v;
@@ -141,7 +159,18 @@ void Task_LoRa_SD(void* pv) {
                     // it feeds the low-battery failsafe and the mixer's voltage compensation —
                     // consuming a silently-held stale reading would be unsafe.
                     if (fresh) {
-                        g_state.sensors.aux_voltage  = aux_v;
+                        // PM2_VMULT trims the 2nd board's reported volts (1.0 = take it as
+                        // sent). Applied HERE, at the single ingest point, so the display,
+                        // PM2, the low-thruster-battery failsafe, the mixer's voltage
+                        // linearisation and the LoRa aux_mv field can never disagree about
+                        // what the pack voltage is.
+                        //
+                        // Until this line existed PM2_VMULT was read by NOTHING — the
+                        // parameter was in the table, echoed on set and stored in NVS, so it
+                        // looked live while changing it could not affect any reading. That is
+                        // the "I change it and see no effect" half of the report.
+                        const float trim = (g_params.pm2_vmult > 0.0f) ? g_params.pm2_vmult : 1.0f;
+                        g_state.sensors.aux_voltage  = aux_v * trim;
                         g_state.sensors.aux_stamp_ms = millis();
                     }
                     g_state.sensors.aux_valid = fresh;

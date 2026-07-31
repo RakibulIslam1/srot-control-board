@@ -352,16 +352,24 @@
 // (It used to be volts-per-ADC-count, ~0.009. The reading now comes from
 // analogReadMilliVolts(), which applies this chip's factory ADC calibration and removes the
 // 11 dB attenuation non-linearity that no single linear multiplier could compensate — the
-// reason the reported pack voltage was wrong. A value below ~0.5 is detected as a stale
-// pre-change setting, replaced by this default, and reported over STATUSTEXT.)
+// reason the reported pack voltage was wrong. A value below ~0.5 is reported over STATUSTEXT
+// as probably-stale, but it is APPLIED — silently substituting the default made the parameter
+// impossible to calibrate, because nothing on screen responded to a value being typed.)
 //
 // 11.28 reproduces the old full-scale (0.009088 V/count x 4095 counts = 37.2 V) against a
 // 3.3 V input, so it is the closest equivalent starting point — but it is a STARTING POINT.
 // Calibrate: PM1_VMULT_new = PM1_VMULT_now x (multimeter reading / reported reading).
 #define DEF_PM1_VMULT           11.28f
-// PM2 arrives pre-scaled from the 2nd board over ESP-NOW; this is documented as inert and is
-// deliberately left in the old units so nothing silently reinterprets it.
-#define DEF_PM2_VMULT           0.009088f
+// PM2 arrives pre-scaled (in volts) from the 2nd board over ESP-NOW, so this is a TRIM, not a
+// divider ratio: 1.0 = report exactly what the 2nd board sends. Use it to correct the thruster
+// pack reading from the GCS without reflashing the 2nd board —
+//   PM2_VMULT_new = PM2_VMULT_now x (multimeter reading / reported reading).
+// It was previously left at the old volts-per-ADC-count value and read by nothing; a board
+// carrying that stored value is migrated to 1.0 once at boot (see params::init).
+#define DEF_PM2_VMULT           1.0f
+// Below this, a stored PM2_VMULT cannot be a display trim (it would report ~0 V on any pack)
+// and is certainly the pre-change volts-per-count value. Migrated, not silently ignored.
+#define PM2_VMULT_LEGACY_MAX    0.05f
 
 // Cascaded angle→rate PID starting gains (per axis; tuned later — see ARCHITECTURE.md §4)
 #define DEF_ANG_RLL_P           4.5f
@@ -544,6 +552,10 @@
 // NOT bumped for the CAL_*/MAG_* params: they are additions, so existing tuning survives.
 #define PARAM_DEFAULTS_VER      4
 #define NVS_KEY_DEFAULTS_VER    "p_defver"
+// Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
+// not a value test: re-testing the value on every boot would overwrite a small trim the
+// operator set deliberately, which is the failure this round removed from PM1_VMULT.
+#define NVS_KEY_PM2_MIGRATED    "p_pm2mig"
 
 // -----------------------------------------------------------------------------
 // SECTION 8b — ESP-NOW LINK (P11, receive-only from the 2nd board)

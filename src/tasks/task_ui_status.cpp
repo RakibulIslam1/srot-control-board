@@ -80,6 +80,12 @@ void Task_UI_Status(void* pv) {
                 v.kill = g_state.sensors.kill_switch;
                 // (No separate aux_v: the thruster-pack voltage reaches the OLED as pm2,
                 //  via PM2_SRC = 2. See the note in oled.h.)
+                // A source that is switched off must not look like one that is failing.
+                // PM2_SRC = 2 (ESP-NOW) still needs ESPNOW_EN = 1, or no packet can arrive.
+                {
+                    const int src2 = (int)g_params.pm2_src;
+                    v.pm2_src_off = (src2 == 0) || (src2 == 2 && g_params.espnow_en <= 0.5f);
+                }
                 v.imu_ever_valid = g_state.sensors.imu_ever_valid;
                 v.bno_resets = g_state.sensors.bno_reset_count;
                 // Bar30 health = fresh reading (its healthy() is only a boot flag, so a

@@ -231,8 +231,10 @@ while True:
 > watchdog while `PARAM_VALUE` messages are arriving.
 
 > **Battery note:** `BATTERY_STATUS` id 0 is the **SBC/electronics** pack (local ADC); id 1 is the
-> **thruster** pack, which arrives from a 2nd board over ESP-NOW. That ESP-NOW sender is not
-> implemented yet, so id 1 currently reports nothing.
+> **thruster** pack, which arrives from a 2nd board over ESP-NOW (`env:second-board`). id 1 is
+> emitted **only while that link is fresh** — it is absent, never held at a stale value, so treat
+> "no id 1 for >2 s" as no data rather than as the last voltage you saw. It is also silent unless
+> `ESPNOW_EN = 1`. Both packs are trimmed by `PM1_VMULT` / `PM2_VMULT` before they are reported.
 
 ### Sign conventions — read this before you write a controller
 
