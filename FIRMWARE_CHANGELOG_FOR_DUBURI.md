@@ -245,6 +245,40 @@ Rev meanings are documented next to the define. We will bump it for anything you
 workaround for; a plain source-text grep cannot survive us fixing something a different way
 than you predicted, and this one already did not.
 
+### …and the revision is now ON THE WIRE, because a pytest is not a vehicle-side guarantee
+
+The snippet above was our first suggestion and it was not good enough. It reads *our* header
+off *your* disk — so it only works where this repo is checked out beside your workspace, and it
+**skips on the Jetson**, which is the one machine where the answer decides whether 20 kg of
+hull decelerates. A test that cannot run at the moment of risk protects nothing.
+
+So the board now reports it:
+
+```
+AUTOPILOT_VERSION.middleware_sw_version == SROT_FW_BEHAVIOUR_REV
+```
+
+We have no middleware, so that field was zero and free. Request it with
+`MAV_CMD_REQUEST_MESSAGE(148)` — the board already answers that for msgid 148. Verified on the
+bench (COM19, 2026-08-01): the board reports **2**.
+
+**`0` means "firmware older than 2026-08-01", not "unknown"** — that build never populated the
+field. Fail closed on `0`.
+
+Suggested host use, and what the PR to `duburi_ws` actually does: read it at connect **and**
+inside `arm()`, and refuse to arm below your required revision. Keep the drift test as well —
+it is a useful workstation tripwire — but do not let it be the only check.
+
+```python
+rev = fc.read_behaviour_rev()          # AUTOPILOT_VERSION.middleware_sw_version
+if rev is not None and rev < FW_BEHAVIOUR_REV_REQUIRED:
+    return False, 'FW_BEHAVIOUR_REV_TOO_OLD'   # stop() would COAST -- do not arm
+```
+
+One asymmetry worth copying: a board that answers "1" is making a definite statement and should
+be refused; a board that answers *nothing* is far more likely a dropped frame, and refusing to
+arm on a comms hiccup is its own hazard — warn hard there, but let the operator proceed.
+
 ## One extra fix you did not ask for, because we found it on the bench
 
 **Every completed move was re-sending its terminal ACK at ~14 Hz, for ever** (`AUDIT.md` R44).
