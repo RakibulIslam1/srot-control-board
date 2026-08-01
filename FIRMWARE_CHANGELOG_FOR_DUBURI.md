@@ -201,6 +201,44 @@ Two answers to your open questions while they are fresh:
 
 ---
 
+## One extra fix you did not ask for, because we found it on the bench
+
+**Every completed move was re-sending its terminal ACK at ~14 Hz, for ever** (`AUDIT.md` R44).
+Pre-existing since at least Round 2, not a Round-6 regression — we found it by running the
+firmware against real hardware rather than reading it.
+
+`updateMove()` used `s_seq = 0` as its idle sentinel, so the next cycle re-adopted the same
+completed command as new, saw it was already done, and re-sent the terminal — a closed loop. One
+`DIVE` produced ~100 `ACCEPTED` acks in 7 seconds.
+
+**Check your action server tolerates this**, because you have been receiving it all along:
+- If you take the first terminal and ignore the rest, you were fine and now you get less traffic.
+- If anything keys off "a terminal arrived" (a counter, a state transition, a log line), it has
+  been firing ~100× per leg.
+
+Bench-verified before and after: `terminals seen = ['ACCEPTED' × ~100]` → `['ACCEPTED']`.
+
+## Bench results from this firmware (COM19, 2026-08-01)
+
+Run against the real board, disarmed throughout. What we could and could not prove:
+
+| Check | Result |
+|---|---|
+| `ESC_TELEMETRY_1_TO_4` / `_5_TO_8` decode | **PASS** — both at 5 Hz. `UNKNOWN_291` still present (ESC_STATUS, kept for QGC/Bondor); pymavlink confirms `291 in mavlink_map = False`, `11030 = True` |
+| `SET_MESSAGE_INTERVAL(ATTITUDE, 20000)` | **PASS** — 11.0 → 50.8 Hz |
+| restore default (`interval = 0`) | **PASS** — 50.8 → 10.2 Hz |
+| `GET_MESSAGE_INTERVAL` | **PASS** — returns `MESSAGE_INTERVAL msgid=30 interval=20000us` |
+| `HEARTBEAT` disable | **PASS** — `DENIED`, as intended |
+| single terminal ACK per move | **PASS** — one `ACCEPTED`, was ~100 |
+| move resolves when AUTO is refused | **PASS** — `FAILED` + `"No depth sensor - mode refused"`, no hang |
+| `DIVE` negative clamp | **INFERRED, not directly observed.** Unclamped, `depth::target()` would be −2.0 and the runaway guard (`ST_DEPTH_DELTA` 2.0) would have tripped and disarmed. It did not, and no runaway STATUSTEXT appeared |
+| `MV_PROG` sweep on TURN | **NOT PROVEN.** On a static bench the hull cannot rotate, so remaining == span and progress correctly reads 0. That is the honest answer where it used to be a fabricated 0.5 — but the sweep itself needs the vehicle to actually move. **Please verify this one in water.** |
+
+Also observed, and worth knowing: **`GAIN` reads 0.500 on this board.** Your §9 hypothesis was
+right — the `JS_GAIN_DEFAULT = 1.0` write never persisted, so `MANUAL_CONTROL` has been running
+at half authority. NVS writes work now (Round 3 enlarged the partition); please re-write it and
+confirm `GAIN` reads 1.0.
+
 ## What we did NOT do, and what we would want first
 
 **No velocity or position work.** Not because we disagree — because there is no firmware-facing

@@ -63,7 +63,7 @@ void Task_MAVLink(void* pv) {
     // know the link was never switched on. Say so once at boot instead.
     if (g_params.espnow_en <= 0.5f && (int)g_params.pm2_src == 2) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
-                                   "ESPNOW_EN=0 - no thruster-pack voltage (set it to 1)");
+                                   "ESPNOW_EN=0 - no thruster voltage (set it to 1)");
     }
 
     for (;;) {

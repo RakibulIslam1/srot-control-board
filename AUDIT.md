@@ -150,6 +150,29 @@ cannot be disabled — a GCS that turned it off would look identical to a dead v
   phase between commands; parameter count corrected to 227; UART2 corrected from 2 Mbaud to
   1 Mbaud in four places against `config.h`.
 
+## R44 — every completed move re-sent its terminal ACK for ever (found on the bench)
+
+**Not from the feedback, and not from reading — found by actually running it.** Measured on
+hardware at ~14 Hz, indefinitely, after every completed move.
+
+`updateMove()` used `s_seq = 0` as its "nothing being tracked" sentinel. But `mv_seq` in the
+snapshot stays at the last command's value, so the very next cycle saw `mv_seq != s_seq` and
+**re-adopted the same completed command as if it were new** — whereupon `mv_done_seq == s_seq`
+was still true, so it re-sent the terminal ACK and zeroed `s_seq` again. A closed loop.
+
+A single `DIVE` produced ~100 `ACCEPTED` acks in 7 seconds. On a 115200 link shared with all
+telemetry, that is continuous waste between every pair of mission legs, and any client that
+keys off "a terminal arrived" gets told the same thing a hundred times.
+
+Fixed by replacing the sentinel with an explicit `s_resolved` latch, so the re-adopt test only
+fires for a genuinely new sequence. The preemption ACK is also now suppressed for an
+already-resolved command — ACKing it again as `CANCELLED` would contradict the `ACCEPTED` the
+companion had already acted on.
+
+**Pre-existing since at least Round 2** (`git log` confirms this round did not touch that
+logic). Five audit rounds read the function and missed it; twelve seconds of bench traffic
+found it. Worth remembering the next time a review feels thorough.
+
 ## Found by review of this round's own work
 
 - The first `movement::cancel()` was written as `abort()`, which would have been inert for the

@@ -495,6 +495,7 @@ static void updateMove(const Snap& s, uint32_t now) {
     // OVERWRITTEN the instant a preempting command arrives — so by the time we notice the
     // preemption, the address of the command being cancelled is already gone.
     static uint8_t  s_src_sys = 0, s_src_comp = 0;
+    static bool     s_resolved = false;   // this seq already got its terminal ACK
 
     // A new (or preempting) command started → track it, ACK immediately.
     // Track on the seq change ALONE — do not require mv_active. A short move can start
@@ -512,7 +513,10 @@ static void updateMove(const Snap& s, uint32_t now) {
         // sequence as COMPLETE (mv_done_seq) in the same window the new command arrived, then
         // it finished and was not cancelled — saying CANCELLED there would be a lie the
         // companion may well act on.
-        if (s_seq != 0) {
+        // ...but only if it had NOT already been resolved. A command that already got its
+        // terminal ACK is finished business; ACKing it again as CANCELLED would contradict
+        // the ACCEPTED the companion already acted on.
+        if (s_seq != 0 && !s_resolved) {
             const bool old_completed = (s.mv_done_seq == s_seq);
             mavlink_message_t m;
             mavlink_msg_command_ack_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
@@ -522,9 +526,18 @@ static void updateMove(const Snap& s, uint32_t now) {
             mav::txReliable(m);
         }
         s_seq = s.mv_seq; t_ack = 0; s_seen_active = false; s_track_ms = now;
+        s_resolved = false;
         s_src_sys = s.mv_src_sys; s_src_comp = s.mv_src_comp;
     }
-    if (s_seq == 0) return;
+    // Nothing to track, or this command is already finished.
+    //
+    // `s_resolved` replaces the old `s_seq = 0` sentinel, which caused an INFINITE terminal-ACK
+    // LOOP: zeroing s_seq made the very next cycle see `mv_seq != s_seq` and re-adopt the SAME
+    // completed command as if it were new, whereupon `mv_done_seq == s_seq` was still true, so
+    // it re-sent the terminal and zeroed s_seq again. Measured on the bench at ~14 Hz,
+    // indefinitely, after every completed move — on a 115200 link shared with all telemetry.
+    // Keeping s_seq means the re-adopt test only fires for a genuinely new sequence.
+    if (s_seq == 0 || s_resolved) return;
     if (s.mv_active) s_seen_active = true;
 
     // Never resolve on "!mv_active" until we have actually SEEN it active: on the first
@@ -540,7 +553,7 @@ static void updateMove(const Snap& s, uint32_t now) {
     if (!s_seen_active && s.mode != (uint8_t)FlightMode::AUTO && (now - s_track_ms) > 500) {
         sendMoveAck(s, MAV_RESULT_FAILED, 0);
         sendNamed(now, "MV_STATE", 0);
-        s_seq = 0;
+        s_resolved = true;
         return;
     }
 
@@ -549,7 +562,7 @@ static void updateMove(const Snap& s, uint32_t now) {
         sendMoveAck(s, MAV_RESULT_ACCEPTED, 100);
         sendNamed(now, "MV_STATE", 0);
         sendNamed(now, "MV_PROG",  1.0f);
-        s_seq = 0;
+        s_resolved = true;
         return;
     }
     if (now - t_ack >= 300) {
