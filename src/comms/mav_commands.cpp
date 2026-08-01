@@ -711,7 +711,14 @@ void update(uint32_t now) {
         }
         if (cal_pending) calibration::saveToNVS();
     }
-    params::serviceSaveAll();
+    // A bulk save that failed must not pass in silence. PREFLIGHT_STORAGE already ACKed
+    // ACCEPTED (the request WAS accepted; the write is deferred to here), so this message
+    // is the only signal that the tune did not persist — it is what the GCS Save button,
+    // autotune and motor_tune all rely on.
+    if (!params::serviceSaveAll()) {
+        mav_stream::sendStatusText(MAV_SEVERITY_CRITICAL,
+                                   "SAVE FAILED - params NOT written (NVS full?)");
+    }
 
     // Stream the parameter list with NON-BLOCKING tx so a full TX buffer never
     // stalls RX draining (a blocking send here can drop inbound QGC commands).

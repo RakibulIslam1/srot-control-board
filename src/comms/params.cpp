@@ -573,8 +573,19 @@ bool saveAll() {
 
 // Deferred save: the flight loop (autotune) requests; Core 0 services it so the
 // blocking flash write never stalls the 500 Hz loop.
+//
+// serviceSaveAll() RETURNS the outcome. It used to discard it — `if (s_save_req) {
+// s_save_req = false; saveAll(); }` — which made every bulk save unconditionally silent.
+// That covers the GCS "Save to flash" button, autotune and motor_tune, i.e. all three paths
+// that persist a whole tune. On a full or worn NVS the write failed, the GCS was told
+// ACCEPTED, and the tuning was gone at the next boot. The single-parameter path already
+// reported this ("<NAME> set but NOT saved"); the bulk path had no equivalent.
 static volatile bool s_save_req = false;
 void requestSaveAll() { s_save_req = true; }
-void serviceSaveAll() { if (s_save_req) { s_save_req = false; saveAll(); } }
+bool serviceSaveAll() {
+    if (!s_save_req) return true;
+    s_save_req = false;
+    return saveAll();
+}
 
 }  // namespace params

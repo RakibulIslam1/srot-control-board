@@ -2,6 +2,171 @@
 
 ---
 
+# Round 5 (2026-08-01) — autotune, and a ground station that lied about the arm state
+
+A full read of the flight firmware and the ground station, with the relay auto-tuner as the
+focus. Eleven findings. The autotune ones share a single theme: **the relay measurement was
+never validated**, so a phase that failed to oscillate was indistinguishable from one that
+worked — and wrote gains anyway.
+
+## R24 — the ground station asserted a stale ARM state for ever
+
+`s_have_state` was write-once. After the first decoded frame the bridge synthesised a
+HEARTBEAT at 2 Hz carrying the last known mode and arm flag, **indefinitely**, and Bondor's
+only liveness test is heartbeat age (< 3 s). So a vehicle that went out of range — or lost
+power — while armed in AUTO left the GCS showing *connected, ARMED, AUTO* with total
+confidence, permanently. Attitude and depth froze, but the two things an operator acts on
+kept being asserted.
+
+This is the exact inverse of R18, which stopped the bridge fabricating state *before* the
+first frame. The gate added then was never given a back edge.
+
+Fixed: the cached heartbeat now expires at `LINK_DEAD_MS` (5 s), after which the bridge goes
+**silent** — Bondor's own heartbeat test then drops the link. Silence is the honest signal;
+repeating a stale "ARMED" is worse than saying nothing. A `STATUSTEXT` announces the loss on
+the edge (naming the arm state at the time) and the recovery.
+
+## R25 — the autotune gain clamps were calibrated for the wrong loop
+
+One clamp set — `KP_MAX 20`, `KI_MAX 10`, `KD_MAX 2` — was applied to all three loop
+families. Those are sane for the **angle** loop (default P 4.5) and meaningless for the
+**rate** loops (defaults 0.135 / 0.090 / 0.0036), where they sit **148× / 111× / 555×** above
+the default. A single clamp across families whose natural scales differ by ~30× is not a
+safety clamp at all: for the rate loops the P and D limits could never be reached, and the I
+limit, when it did bind, bound at 111× the default.
+
+Fixed with a per-family `LIMITS[]` table at roughly 7–11× each family's compiled default —
+loose enough never to truncate a genuine tune, tight enough that a bad measurement cannot
+write something unflyable. Hitting a clamp is now reported, because it means the measurement
+wanted somewhere the envelope refused.
+
+## R26 — a phase that never oscillated still wrote a full PID
+
+`measure()` exited on `periods >= MIN_PERIODS` **or** an 8 s timeout, and gains were then
+applied on `s_period_n > 0` — so **one** counted half-cycle out of a required six was enough.
+There was no distinction between "measured a clean limit cycle" and "drifted across the
+hysteresis band once".
+
+Worked through: a single ~4 s interval gives `Tu = 8 s` and `Kd = Kp·Tu/3 = 2.67·Kp`, which
+for a rate loop lands at the old clamp — **555× the default D gain**, into a derivative term
+on a 500 Hz loop. The mirror case, a fast noise-driven crossing, drives `Ki` to its clamp
+instead. Both are reachable on a bench in air, which is where anyone would first try this.
+
+Fixed by `measurementIsValid()`: the full half-cycle count, an amplitude that clears the
+Schmitt hysteresis by `AMP_MARGIN`, and a period spread within `PERIOD_SPREAD_MAX` (a real
+limit cycle has a consistent period; drift and noise do not).
+
+## R27 — the measured amplitude was the entry transient
+
+`s_amp` was a running max over the entire phase, reset only at phase entry. The relay steps
+to full amplitude the instant a phase opens, so the opening excursion is a step response —
+typically the largest swing of the run — and it set the amplitude used for `Ku = 4A/(πa)`.
+
+Relay tuning wants the *steady-state* amplitude. Measuring the transient biases `a` high and
+`Ku` low, and makes two runs on the same vehicle disagree depending on how violent the entry
+happened to be. Fixed by discarding the first `SETTLE_CROSSINGS` half-cycles, amplitude
+included.
+
+## R28 — success and total failure were indistinguishable
+
+Autotune emitted exactly one message, ever: `"Disarmed: autotune finished"`. No gains
+reported, no per-phase result, and **no warning when a phase produced nothing usable** —
+`finishPhase()` silently skipped the write and moved on.
+
+`motor_tune` in the same tree already reports both its results and its failure
+(`"MTune: no motor spun - check ESCs/arming"`), so this was an omission, not a stance.
+
+Now: one line per phase with `Tu` and the resulting P/I/D (plus `CLAMP` when the envelope
+bound), one line per failure with the reason, and a summary naming how many phases failed.
+All sized under 50 characters — MAVLink's `STATUSTEXT.text` is `char[50]` and the
+cross-core queue slot is 64 B, so the messages that explain the tune were the ones most at
+risk of arriving truncated.
+
+## R29 — a failed rate phase silently poisoned every phase after it
+
+`applyGains()` writes straight into `g_params`, and `attitude::rateAxis()` calls
+`loadGains()` on **every** invocation, so a gain is live on the next control cycle. The angle
+phases relay a rate *command* through the rate PID, and the depth phase holds attitude with
+it — so a bad rate result made every later measurement meaningless while the tune reported
+success at the end.
+
+A failed RATE phase now aborts the whole tune, with a reason, and does not save.
+
+## R30 — ATUNE latched and fired on the next arm, in any mode
+
+`ATUNE = 1` (and `MAV_CMD_USER_5`) set `autotune_active` unconditionally, and the gate is
+`(in.autotune || mode == AUTOTUNE) && armed` — **the flight mode is irrelevant**. Set it
+while disarmed and it persisted (the clear runs only on an armed→disarmed edge, which never
+occurs if you were already disarmed), so the next arm for any purpose started a full-authority
+relay tune while the GCS and OLED still showed MANUAL.
+
+Autotune now forces `mode = AUTOTUNE` on start, whichever way it was triggered, so what the
+vehicle is doing is visible everywhere the mode is, and the start notice says the thrusters
+will drive.
+
+## R31 — a safety abort reported the tune as finished
+
+`at_active` was latched before the safety-monitor block, so on an abort the tune branch still
+ran, saw "not running", and queued `"Disarmed: autotune finished"` immediately after the
+safety reason. Fixed by clearing the local and edge latches in the abort path — which also
+removes a redundant abort and duplicate "Autotune stopped" one cycle later.
+
+## R32 — every bulk parameter save was unconditionally silent
+
+`serviceSaveAll()` discarded `saveAll()`'s return value. That covers the GCS "Save to flash"
+button, autotune and motor_tune — **all three paths that persist a whole tune**. On a full or
+worn NVS the write failed, `PREFLIGHT_STORAGE` returned `ACCEPTED`, and the tuning was gone at
+the next boot. The single-parameter path already reported this; the bulk path had no
+equivalent. `serviceSaveAll()` now returns the outcome and the caller reports it.
+
+## R33 — the mixer coupled two mechanically independent motor groups
+
+The mix matrix is block-diagonal: motors 1–4 (horizontal) are non-zero only in
+yaw/forward/lateral, motors 5–8 (vertical) only in roll/pitch/throttle. The two groups share
+no axis and no thruster. But saturation used **one** `maxabs` across all eight, so a
+saturating *forward* command scaled down *roll and pitch* — thrusters nowhere near their
+limits.
+
+Worked example: `forward = 1.0` with `yaw = 0.5` drives motor 2 to −1.5, giving a global
+scale of 0.667 — a hard forward burst silently cost a third of the vehicle's roll/pitch
+authority, in the manoeuvre where you want it most. Now normalised per group.
+
+## R34 — smaller items
+
+- **Pre-arm was IMU-only.** Added a leak check (gated on `LEAK_EN`) and a thruster-pack
+  check (gated on `FS_BAT_ENABLE`, so a pre-arm is never stricter than the failsafe it
+  anticipates). Arming into a leak previously succeeded, then surfaced — safe, but an
+  unexplained surface is a fault to diagnose where a refusal is a fact to act on.
+- **Ground station `VFR_HUD.heading` was not normalised.** `yaw_cd/100` is signed, the field
+  is `uint16` 0..360, so every westerly heading read as ~65400 — **over LoRa only**. The
+  control board normalises, so the same vehicle disagreed with itself depending on the link.
+- **Ground station `ESC_STATUS` timestamp was in milliseconds**, not µs. Same
+  divergence-between-links class.
+- **Ground station diagnostics streamed at 8 Hz**, four times the control board's own
+  cadence — nine `NAMED_VALUE_FLOAT`s per frame, ~2 KB/s of an 11.5 KB/s link, competing
+  directly with the relayed `PARAM_VALUE` traffic the LoRa path is already short of.
+  Throttled to 2 Hz.
+- **`isStateCmd()` tagged `SET_MODE` and `DO_SET_MODE` differently**, so a mode change sent
+  one way would not supersede a queued one sent the other. They now share a supersede class;
+  arm/disarm keeps its own.
+- **Dead code**: `loraSendMsg()`'s `reps` parameter and its `delay(4)` — every call site
+  passed 1. Loss tolerance is handled by queueing three copies, which spreads them across
+  three TDM slots and is strictly better against a burst fade.
+
+## Found by review of this round's own changes
+
+- The new pre-arm battery check ignored `FS_BAT_ENABLE`, so it would have refused to arm on
+  a threshold the pilot had explicitly disabled. Gated.
+- Three new `STATUSTEXT` messages exceeded MAVLink's 50-character field and would have been
+  truncated — including two of the ones added specifically to explain a failure. Measured
+  and shortened.
+- The safety-abort fix cleared the local latches but not the edge latches, leaving a
+  redundant abort and a duplicate message one cycle later. Cleared both.
+- `params.h` still documented `FS_BAT_VOLTAGE` as a PM1 threshold, which R-round-2 had
+  already established was the wrong battery. Corrected.
+
+---
+
 # Round 4 (2026-07-31) — the LoRa link, and two parameters that could not be tuned
 
 From a second field report: the mode display flickers to a wrong value for well under a second,

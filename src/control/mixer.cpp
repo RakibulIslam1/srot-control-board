@@ -34,22 +34,37 @@ static const float M[NUM_THRUSTERS][6] = {
     { -1,    1,     0,   -1,    0,    0 },  // 8 RL vert
 };
 
+// The matrix above is BLOCK-DIAGONAL, and the saturation handling has to respect that:
+//   motors 1-4 (horizontal) are non-zero only in yaw / forward / lateral
+//   motors 5-8 (vertical)   are non-zero only in roll / pitch / throttle
+// The two groups share no axis and no thruster, so they saturate independently.
+static const int N_HORIZ = 4;   // motors 0..3; the rest are the vertical group
+
 void mix(float roll, float pitch, float yaw,
          float throttle, float forward, float lateral,
          float out[NUM_THRUSTERS]) {
     const float demand[6] = { roll, pitch, yaw, throttle, forward, lateral };
-    float maxabs = 1.0f;
+    float maxabs[2] = { 1.0f, 1.0f };
     for (int m = 0; m < NUM_THRUSTERS; ++m) {
         float v = 0;
         for (int c = 0; c < 6; ++c) v += M[m][c] * demand[c];
         out[m] = v;
         float a = fabsf(v);
-        if (a > maxabs) maxabs = a;
+        int g = (m < N_HORIZ) ? 0 : 1;
+        if (a > maxabs[g]) maxabs[g] = a;
     }
-    // Uniform scale-down keeps the relative mix intact when saturated.
-    if (maxabs > 1.0f) {
-        float inv = 1.0f / maxabs;
-        for (int m = 0; m < NUM_THRUSTERS; ++m) out[m] *= inv;
+    // Uniform scale-down WITHIN each group keeps that group's relative mix intact when it
+    // saturates, without touching the other one.
+    //
+    // This used to compute ONE maxabs across all eight thrusters, which coupled two
+    // mechanically independent groups: a saturating FORWARD command (horizontal motors)
+    // scaled down ROLL and PITCH (vertical motors) even though those were nowhere near
+    // their limits. Worked example: forward = 1.0 with yaw = 0.5 drives motor 2 to -1.5,
+    // giving a global scale of 0.667 — so a hard forward burst silently cost a third of the
+    // vehicle's roll/pitch authority, in the manoeuvre where you want it most.
+    for (int m = 0; m < NUM_THRUSTERS; ++m) {
+        int g = (m < N_HORIZ) ? 0 : 1;
+        if (maxabs[g] > 1.0f) out[m] /= maxabs[g];
     }
 }
 
