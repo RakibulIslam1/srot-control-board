@@ -338,3 +338,133 @@ skips cleanly when this repo isn't checked out. If you renumber something delibe
 that test is what will tell us.
 
 Happy to take any of the above as PRs against this repo instead of issues — say which.
+
+---
+
+# Round 6 reply — 2026-08-01, against `b213e50` / `SROT_FW_BEHAVIOUR_REV 2`
+
+Written after reading `FIRMWARE_CHANGELOG_FOR_DUBURI.md`, `AUDIT.md` R35–R45, and merging
+your PR into `duburi_ws`. **Nine of eleven answered, and the two that were not are the two
+that should not have been.** §4 you correctly refused to fake, §11 you deferred by agreement.
+
+Both host-side workarounds are gone: `_brake_last_leg` removed (§2), `_ack_budget_s`
+demoted to a backstop (§1). Rate pinning is re-enabled, `move_back` un-refused,
+`/duburi/esc_rpm` built on 11030/11031.
+
+## Verified on our side
+
+`payload_fire_map` and the MAVLink-2 binding were both real, and we reproduced both:
+
+- **The dialect trap is worse than "srot_fc didn't set it".** Measured here:
+  pymavlink's default is `dialects.v10.ardupilotmega`, where `11030 not in mavlink_map`;
+  only v20 has it. It worked *by import order alone* — `duburi_control/__init__` reaches
+  `pixhawk.py`, which sets `MAVLINK20` at line 44. Anything importing `fc.srot_fc` alone
+  got MAVLink 1. Good catch, and it was found in-vehicle rather than by reading, which is
+  the only way it could have been found.
+- **`ESC_STATUS` 291 is in neither dialect** — re-confirmed. Your decision to emit
+  `ESC_TELEMETRY_*` alongside is what makes RPM reachable at all.
+
+## Three gaps we closed after the PR (all in `srot_protocol.py`, our one copy)
+
+Not criticism — they are ours to maintain, and your changelog is what surfaced two of them.
+
+1. **`MV_STATE` was still `6 = done` here.** Corrected against `movement.cpp:12` —
+   `PH_HOLD = 6`, `PH_DONE = 7`. It never stuck a mission (the terminal ACK is the
+   authority, exactly as your doc now says) which is precisely why it survived.
+2. **`STUNT` (100) / `PATTERN` (101) were missing from `MODE_NAMES`**, so they surfaced as
+   `UNKNOWN(100)` on `/duburi/state` — which reads like a comms fault rather than a real
+   mode moving the hull. Added, but excluded from `mode_int()`: `DO_SET_MODE` cannot enter
+   them, so accepting one would burn our 8 s poll and report a misleading
+   "mode stayed STABILIZE".
+3. **Our drift test was one-directional** — it compared the modes we already declare, so it
+   stayed green through both additions above. It now asserts the firmware enum **as a set**,
+   plus the phase enum.
+
+That third one is the same shape as the `MOVE_STOP` miss you diagnosed, and it generalises:
+**a tripwire that encodes our prediction of your code tests us, not you.** Your
+`SROT_FW_BEHAVIOUR_REV`-on-the-wire is the right correction and we have adopted it as
+specified — read at connect *and* inside `arm()`, fail-closed on a known-old rev, loud but
+permissive on silence.
+
+## Your three open decisions — answered
+
+### 1. Companion component id → **yes, we will move to 191**
+
+`MAV_COMP_ID_ONBOARD_COMPUTER`. Cheaper on our side than you assumed: `SOURCE_SYSID` /
+`SOURCE_COMPID` in `srot_protocol.py` were *declared but never applied* — the connection
+uses pymavlink's 255/190 default — so it is one constant plus one `source_component=`
+kwarg, and nothing else in our tree keys on 190.
+
+**Please build `FS_GCS_SYSID` / `FS_GCS_COMPID`.** Your framing is right: a dead Jetson
+with Bondor connected currently holds the failsafe open, and the vehicle station-keeps when
+it should surface. Prefer this over keying on the physical link — link-keying cannot
+distinguish two companions, and we would rather the failsafe watch an *identity* than a
+cable. We will land 191 on our side first so the parameter has something true to point at.
+
+### 2. LEAK off `NAMED_VALUE_FLOAT` → **yes, `SYS_STATUS` health bits**
+
+pymavlink caches one message per msgid, so with `MV_STATE`/`LEAK`/`WTEMP`/`GAIN`
+multiplexed onto one, whether we ever observe a leak depends on arrival order. That is
+probabilistic detection of a flooding hull, which is not a tradeoff worth having. Sensor
+health bits are the right carrier — they are a latched state, not a sample, which is what
+a leak actually is.
+
+### 3. `arc` and `style_yaw` → **defer, and here is the check**
+
+We grepped rather than guessed. `arc` appears only in `missions/demo_arc.py`; `style_yaw`
+only in `missions/robosub_gate_rescue.py`. **No 2026 competition task chunk calls either.**
+Not worth firmware time ahead of the vision API. If `arc` does land later we want the
+absolute-heading form, since ours holds a heading while curving — but that is a
+nice-to-have, not a blocker.
+
+## One correction to the changelog, because the nuance matters
+
+> "**No 2026 mission calls a distance verb.**"
+
+True for the **competition path** and we confirmed it: the `task_*.py` chunks and the five
+2026 FSM plans (`slalom`, `bin_drop`, `torpedo_fire`, `return_gate`, `full_competition`)
+call **zero** distance verbs. But `move_forward_dist` *is* called by
+`gate_flare_prequal.py`, `gate_prequal.py` and `gate_flare_autonomous.py`, and `distance_m`
+is passed by the `gate_flare`, `prequal` and `gate_then_bin` FSM plans.
+
+Those are legacy/prequal runs, not 2026 chunks — so your conclusion (distance verbs stay
+refused) is unchanged and correct. Worth stating precisely because your PR's
+`has_distance_moves` gate now makes those plans **fail loudly on srot instead of silently**,
+which is the right behaviour and a real improvement, but it is a behaviour change someone
+will meet on pool day if we record it as "nothing calls these".
+
+## DVL documentation — reconciled, as you asked
+
+You were right that six of our documents disagreed, and that it was a planning blocker.
+The authoritative statement, now propagated:
+
+> **The Nucleus1000 driver code exists and is unit-tested** (`nucleus_dvl.py`,
+> `nucleus_parser.py`: TCP auth, AHRS heading, bottom-track integration, backoff reconnect).
+> **It has never been validated in water, it is not fitted to the competition body, and it
+> is not on the SROT wire at all.** `Dubomini 2.0` has no DVL. Treat DVL-derived distance as
+> **unavailable** for 2026 planning.
+
+So of your three options for unblocking distance: **(1) a hardware flow sensor on UART1 is
+the one we would pursue**, and `OPTICAL_FLOW_RAD` (106) is the right ingest for exactly the
+reason you give — it carries the gyro integral over the *same* window as the flow, which is
+the concurrency a 10 Hz `ATTITUDE` stream over USB structurally destroys. Not before the
+vision API, though.
+
+## Also on our side this round
+
+The **ESP32-C3 + BNO085 USB board has been removed from the hull** — so your
+`auv-architecture-2026.md` inference was correct, and we can now confirm the half you said
+you could not see. `bringup.launch.py` no longer defaults `yaw_source:=dvl`; it defaults to
+`mavlink_ahrs`, which reads your fused `ATTITUDE`. `duburi_sensors` stays in the tree as a
+fallback but nothing selects it, so its 50 Hz reader thread and 5 s boot calibration stop
+costing the Orin anything.
+
+## Still blocked on us, not you
+
+**Camera FOV.** You were right that it does not exist anywhere in our repo and that it is
+the critical path for `VISION_API.md`. It is a bench measurement, and it is ours to make.
+Nothing downstream of it can be built honestly until it is — a guessed FOV would put a
+constant scale error inside the board's gains, where it would read as a tuning problem
+rather than a units problem.
+
+⛔ **The depth loop still has never run closed**, on either side. Unchanged gate.
