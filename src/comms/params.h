@@ -60,7 +60,10 @@ struct Params {
     float lights_step;      // LIGHTS_STEP (fraction per brighter/dimmer press)
     float fs_gcs_enable;    // FS_GCS_ENABLE (GCS-loss failsafe on/off)
     float fs_bat_enable;    // FS_BAT_ENABLE
-    float fs_bat_voltage;   // FS_BAT_VOLTAGE (V, PM1 low-battery threshold)
+    // FS_BAT_VOLTAGE (V). THRUSTER-pack threshold, not PM1 — the electronics pack is a
+    // different battery and this used to be compared against it, which meant the failsafe
+    // guarded the wrong one. Source is the 2nd board over ESP-NOW; inert without it.
+    float fs_bat_voltage;
     float pilot_speed;      // PILOT_SPEED (0..1 forward/lateral scale for fine moves)
     float pilot_yaw_rate;   // PILOT_YAW_RATE (deg/s yaw at full stick — low = precise)
     float pilot_expo;       // PILOT_EXPO (0..1 stick expo for fine centre resolution)
@@ -186,8 +189,12 @@ bool saveAll();
 
 // Deferred save: requestSaveAll() sets a flag (safe from the flight loop);
 // serviceSaveAll() performs the actual saveAll() if pending (call from Core 0).
+// Returns false ONLY when a pending save was attempted and failed — true when it
+// succeeded and true when there was nothing to do. The caller must report a false:
+// this is the only chance any bulk save (GCS "Save to flash", autotune, motor_tune)
+// gets to admit that a whole tune did not persist.
 void requestSaveAll();
-void serviceSaveAll();
+bool serviceSaveAll();
 
 // Validate a GPIO param value: returns it if a usable ESP32 GPIO (0..39, not the
 // flash pins 6..11), else the given fallback. Pass output=true for output-role pins

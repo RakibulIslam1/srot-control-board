@@ -411,8 +411,22 @@ void Task_ControlLoop(void* pv) {
         g_mtune_active = mt_active;
         if (at_active && !prev_autotune) {
             autotune::start(in.depth_ok); at_depth0 = in.depth;
-            mav_stream::queueStatusText(MAV_SEVERITY_INFO,
-                                        "Autotune started - disarm or leave mode to stop");
+            // Put the vehicle IN AutoTune mode, whichever way the tune was triggered.
+            // The ATUNE param (and MAV_CMD_USER_5) set autotune_active with no reference to
+            // the flight mode, and the gate below is `in.autotune || mode == AUTOTUNE` — so
+            // setting ATUNE while disarmed latched, and the next arm started a full-authority
+            // relay tune in whatever mode the pilot happened to be in, with the GCS and OLED
+            // still showing MANUAL (or STABILIZE, or...). Reflecting it in the mode makes
+            // what the vehicle is actually doing visible everywhere the mode is displayed.
+            if (in.mode != FlightMode::AUTOTUNE) {
+                StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
+                if (lk.ok()) g_state.control.mode = FlightMode::AUTOTUNE;
+                in.mode = FlightMode::AUTOTUNE;
+            }
+            // Kept under 50 chars — MAVLink's STATUSTEXT.text field is char[50] and
+            // anything past it is silently dropped, tail first.
+            mav_stream::queueStatusText(MAV_SEVERITY_WARNING,
+                                        "AUTOTUNE started - thrusters WILL drive");
         }
         // Leaving AUTOTUNE mode / clearing ATUNE must actually STOP the tuner. Previously
         // the loop just stopped calling update(), freezing the state machine mid-phase so
@@ -479,6 +493,20 @@ void Task_ControlLoop(void* pv) {
                 StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
                 if (lk.ok()) { g_state.control.armed = false; g_state.control.autotune_active = false; }
                 in.armed = false;
+                // Clear the LOCAL latches too. They were captured before this check, so the
+                // tune branch further down still ran on an aborted tuner, saw "not running"
+                // and queued "Disarmed: autotune finished" immediately after the safety
+                // reason — reporting success for a run that was killed.
+                at_active = false;
+                mt_active = false;
+                g_mtune_active = false;
+                // And the EDGE latches, which were assigned above this block. Leaving them
+                // set means next cycle sees (!at_active && prev_autotune) and fires the
+                // ordinary stop-edge: a redundant abort plus an "Autotune stopped" INFO
+                // queued one cycle behind the safety ERROR that actually explains it. The
+                // tuners are already aborted here, so there is no edge left to handle.
+                prev_autotune = false;
+                prev_mtune = false;
             }
         }
 
