@@ -3,7 +3,7 @@
 //
 //  Stage 1 (this file): a pure DShot + telemetry BRIDGE.
 //    - core0: drive 8 bidirectional-DShot ESCs (PIO) and read back eRPM
-//    - core1: UART link to the ESP32 (Serial1 @ 2 Mbaud) — parse commands, reply
+//    - core1: UART link to the ESP32 (Serial1 @ 1 Mbaud) — parse commands, reply
 //             with telemetry, using the shared `thruster_link_proto.h` framing.
 //  The ESP32 computes the 8 DShot 3D values (its normal mixer output) and sends
 //  them; this Pico just outputs them and returns RPM. Stage 2 will add a per-
@@ -440,7 +440,7 @@ static void updateStatusLed() {
 void setup1() {
     pinMode(PIN_STATUS_LED, OUTPUT);
     digitalWrite(PIN_STATUS_LED, HIGH);             // ON at boot = powered
-    // The earlephilhower default Serial1 FIFO is only 32 B — at 2 Mbaud that overflows in
+    // The earlephilhower default Serial1 FIFO is only 32 B — at 1 Mbaud that overflows in
     // ~160 us, so any loop1() delay (mutex wait / blocking reply write) dropped commands →
     // the Pico stopped replying → ESP32 saw a telemetry gap ("link restored" flap). 1024 B
     // RX + TX gives plenty of headroom. Must be set BEFORE begin().

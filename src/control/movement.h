@@ -52,6 +52,20 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
 
 void abort();   // brake→stop the current command (preemption / safety)
 
+// Force the command to its IDLE terminal state immediately, with no brake phase.
+//
+// Distinct from abort() on purpose. abort() enters PH_BRAKE, which only advances inside
+// update() — and update() is only called from the AUTO branch of the control loop. So when
+// AUTO is being TAKEN AWAY (a failsafe forcing SURFACE, or an operator/GCS mode change) an
+// abort() would leave the command parked in PH_BRAKE for ever: type() never returns to NONE,
+// the loop's mv_* publish never sees a falling edge, and the companion's move is stranded on
+// COMMAND_ACK IN_PROGRESS indefinitely. That was JETSON_FEEDBACK.md §1.
+//
+// Braking is not possible here anyway — the incoming mode owns the thrusters from this cycle
+// on, and it is the one that must deal with the remaining momentum. So this reports the
+// command finished and gets out of the way.
+void cancel();
+
 // One control step. Sets `running` true while a command executes (false = idle station-keep).
 Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
               float depth, const int16_t rpm[NUM_THRUSTERS], float dt, bool& running);

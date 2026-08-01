@@ -2,6 +2,171 @@
 
 ---
 
+# Round 6 (2026-08-01) — the contract the companion is built on
+
+Not our findings. The `duburi_ws` companion team read this firmware in full and wrote
+[`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md), filtered to one question: *what does the companion
+hit that it cannot fix from its own side?* Six of their eleven items are real defects that five
+rounds of our own auditing missed — because we were auditing the vehicle in isolation and these
+only bite across the wire.
+
+Every claim below was re-verified against the source before it was fixed, and an adversarial
+review then re-verified the verification (and caught two errors in it — see the end).
+
+## R35 — a move was stranded on `IN_PROGRESS` for ever when a failsafe displaced AUTO
+
+**The highest-severity defect in the codebase, and it fired only when the vehicle was already in
+trouble.** `AGENTS.md` invariant #3 promises every command reaches exactly one terminal ACK.
+
+The `mv_active` / `mv_done_seq` publish was gated on `mode == AUTO`. A leak, low-battery or
+GCS-loss failsafe forces `mode = SURFACE` without ending the move — and once that publish stops
+running, `mv_active` freezes `true` and `mv_done_seq` never advances. `mav_stream`'s
+done-condition is `(mv_done_seq == s_seq) || (s_seen_active && !mv_active)`: **both terms are
+then permanently false.** The un-started escape hatch requires `!s_seen_active`, so it cannot
+rescue a move that had already begun. Nothing else in the tree writes those fields. Result:
+`COMMAND_ACK IN_PROGRESS` at 3 Hz, indefinitely. Same on any operator mode change mid-move,
+including one from Bondor.
+
+Fixed with two changes, both needed:
+
+- **`movement::cancel()`** — a new terminal that goes straight to idle, called when AUTO is
+  taken away. Deliberately *not* `abort()`: abort parks the command in `PH_BRAKE`, which only
+  advances inside `movement::update()`, which is only reached from the AUTO branch we are
+  leaving. Using abort here would have swapped one permanent non-terminal state for another —
+  a fix that looks right and changes nothing.
+- **The `mv_*` publish is now unconditional.** The falling edge that latches `mv_done_seq` has
+  to be observable from outside AUTO or the cancel means nothing.
+
+## R36 — `MOVE_STOP` applied zero braking thrust
+
+`JETSON_COMMS.md` documented stop as "brake to a halt". `movement::start()` zeroed `s_uf`,
+`s_ul` and `s_speed` **before** the type switch, so `PH_BRAKE` computed `-0 × gain × 0` = zero.
+The brake *duration* was correct — it used the leftover ramped speed — so the vehicle held zero
+translation for exactly the right interval and coasted.
+
+The asymmetry that hid it: `movement::abort()` never touched those fields, so **internal
+preemption braked correctly the whole time**. Only the wire-reachable verb was broken, which is
+why five audit rounds of reading the module never caught it.
+
+Fixed by capturing the outgoing leg's axis and ramped speed before the reset and restoring them
+in the `STOP` case. On a hull with no position or velocity estimate a coast is unrecoverable
+state — nothing on board or on the host knows how far it travelled.
+
+> **Coordinated across repos.** The companion carries a host-side reverse-leg brake as a
+> workaround, and their `test_srot_protocol_drift.py` **fails when this lands** — by design, so
+> they drop their brake rather than double-kick the hull.
+
+## R37 — the SURFACE failsafe kept driving the last pilot translation and yaw
+
+`computeDemands()` derives surge/sway from the pilot setpoints unconditionally for every mode,
+and the SURFACE case passed pilot yaw straight through. Nothing zeroed them on a failsafe — the
+only zeroing was on the ARMED→DISARMED edge, and no failsafe disarms.
+
+So on **GCS loss** — the one case where the last sticks are stale *by definition* — the vehicle
+ascended while continuing to translate and yaw on whatever the final packet said, indefinitely.
+A vehicle that has lost its operator should not still be driving somewhere.
+
+Two fixes, because they cover different failures:
+
+- SURFACE now zeroes translation and yaw outright. That covers a sender still talking while the
+  vehicle surfaces for an unrelated reason — a leak with the pilot still on the sticks.
+- **`MANUAL_CONTROL` got the freshness triple.** It was the only external input in this firmware
+  without one, which is notable given `AGENTS.md` requires it of every external input and the
+  recurring bug class in this codebase is exactly "a stale input that keeps being used". Full
+  authority for `MANUAL_FRESH_MS`, then a linear ramp to neutral by `MANUAL_DECAY_MS` — a ramp,
+  not a cliff, so a single dropped packet does not make piloting lurch. Applied once in
+  `readInputs()` so all six mode branches inherit it without needing to know.
+
+## R38 — a failsafe left the vehicle armed at the surface for ever
+
+The failsafe forces SURFACE but never disarms, so a permanent link loss ended with the vehicle
+armed and station-keeping at 0 m until the battery ran out. There was no end state at all.
+
+Now disarms once depth has stayed above `FS_SURFACE_DEPTH_M` continuously for
+`FS_SURFACE_HOLD_MS`. Gated on a working depth sensor: without one the ascent is open-loop and
+"am I at the surface?" is unanswerable, so it keeps pushing up rather than disarming at an
+unknown depth and sinking. The hold is what stops a wave slapping the sensor from disarming a
+vehicle that is still deep.
+
+## R39 — `DIVE` was not clamped to at-or-below the surface
+
+`JETSON_COMMS.md` claimed DIVE `p2` was "clamped at ≥ 0 — you cannot command above the surface".
+It was not: `movement.cpp` had a bare assignment, `depth::setTarget()` has no clamp, and the one
+inside `depth::update()` sits in a stick-deadband branch that AUTO never enters.
+
+A negative target therefore produced sustained ascent — and because the runaway guard references
+`depth::target()`, **the guard tracked the bad setpoint instead of catching it.** Now clamped at
+the source. (The companion rejects `target > 0` host-side, so this was defence in depth — but it
+was a documented safety property that did not exist, on the one loop that has never run closed.)
+
+## R40 — `MV_PROG` carried no information for TURN and DIVE
+
+`progress()` had cases for cruise, brake, style and hold; `PH_TURN` and `PH_DIVE` fell through to
+`default: return 0.5f`. Those are the two verbs a mission most wants to wait on.
+
+They are closed-loop, so there is no duration to divide by — now they latch the span at start
+(angle or depth to cover) and divide the live remaining error, which both completion tests
+already compute. Capped at 0.99 so only the terminal state reports 1.0.
+
+## R41 — per-thruster RPM was undecodable by the companion
+
+`ESC_STATUS` (291) is a WIP message that upstream MAVLink **removed from `common`**. pymavlink
+silently discards any message whose id is missing from its CRC-extra table — no error, no
+callback. So the board could be reporting RPM perfectly while the companion read nothing, and it
+looked exactly like an ESC or Bluejay fault. They verified it against four dialects.
+
+Now also emits `ESC_TELEMETRY_1_TO_4` (11030) and `ESC_TELEMETRY_5_TO_8` (11031) — already in
+the dialect we vendor, exactly 4 ESCs each, and they decode everywhere. `ESC_STATUS` is kept
+alongside because QGC and Bondor render it.
+
+## R42 — no way to change a stream rate
+
+Neither `SET_MESSAGE_INTERVAL` (511) nor `REQUEST_DATA_STREAM` (66) existed, so the fixed 10 Hz
+`ATTITUDE` was the hard ceiling on every loop the companion runs — un-raisable for a control
+loop, un-lowerable for a slow link. The rates were hardcoded literals.
+
+Now a small table with a live interval and a compiled default per stream, 511 and 510
+implemented against it. Requests are clamped to a 20 ms floor so a companion cannot ask for
+1 kHz and starve the `PARAM_VALUE` and `COMMAND_ACK` traffic missions depend on. `HEARTBEAT`
+cannot be disabled — a GCS that turned it off would look identical to a dead vehicle.
+
+## R43 — smaller items
+
+- **A failed parameter persist was a WARNING.** Raised to `ERROR`: `PARAM_VALUE` still echoes
+  the accepted value, so from the companion's side a failed write looks fine and then silently
+  reverts at the next boot. They lost a pool session to exactly this.
+- **`ATTITUDE` is now exempt from the param-download blackout**, alongside `HEARTBEAT` and
+  `ESC_STATUS`. A 10–15 s hole in the companion's control-loop input because an operator opened
+  Bondor's Setup tab is not acceptable. The rule is now explicit: anything a *mission* depends
+  on goes above the guard, anything only a human reads goes below.
+- **`feedforward`'s trim-learning gate is inverted.** It enumerated the modes allowed to learn,
+  so an autonomous mode that never drives the sticks left `learn` permanently true and the CoB
+  auto-trim learned against machine-commanded effort. AUTO was excluded by name; the next
+  autonomous mode would have had to remember. Now derived from "is a pilot mode", so a new mode
+  is excluded until someone deliberately includes it.
+- **Docs corrected**: `MV_STATE` 6 is HOLD and 7 is DONE (the table said 6 = done, so every
+  station-keep leg read as complete); `TEMPORARILY_REJECTED` documented as the fifth, *non*-
+  terminal reply; the preemption "quick brake first" claim removed, because there is no brake
+  phase between commands; parameter count corrected to 227; UART2 corrected from 2 Mbaud to
+  1 Mbaud in four places against `config.h`.
+
+## Found by review of this round's own work
+
+- The first `movement::cancel()` was written as `abort()`, which would have been inert for the
+  reason described in R35 — caught while tracing the brake phase, before it shipped.
+- The first pass at R36 removed the `s_uf`/`s_ul` reset entirely, which would have leaked the
+  previous leg's travel axis into every subsequent verb. Narrowed to capture-and-restore.
+- The adversarial review found the proposed `FS_GCS_SYSID` fix for the GCS-failsafe-source
+  problem **cannot work**: `JETSON_COMMS.md` tells companions to connect as 255/190 and our own
+  LoRa bridge synthesises 255/190, so a parameter naming the required source matches both and
+  the dead-Jetson case survives untouched. **Deferred rather than shipped**, because a fix that
+  looks like it closes a failsafe gap and does not is worse than no fix. Resolving it needs a
+  distinct component id for the companion — a coordinated three-repo change.
+- It also downgraded the `feedforward` item from defect to robustness: a second gate already
+  excluded AUTO, so nothing was actually mislearning today.
+
+---
+
 # Round 5 (2026-08-01) — autotune, and a ground station that lied about the arm state
 
 A full read of the flight firmware and the ground station, with the relay auto-tuner as the

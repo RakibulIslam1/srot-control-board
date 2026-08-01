@@ -65,8 +65,13 @@ exception is raised, the vehicle just behaves wrong.
 3. **Every command reaches exactly one terminal ACK.** `ACCEPTED` / `CANCELLED` / `FAILED` /
    `DENIED`, plus `TEMPORARILY_REJECTED` on a mutex miss. `IN_PROGRESS` is not terminal. A
    companion action client that never receives a terminal result **hangs**, which is worse
-   than any error. (This guarantee is currently *violated* on a mid-move failsafe —
-   `JETSON_FEEDBACK.md` §1.)
+   than any error.
+   *Held again as of 2026-08-01 (`AUDIT.md` R35).* It was violated on a mid-move failsafe for
+   two days. Two things make it hold, and both must stay: AUTO being displaced ends the move
+   (`movement::cancel()`, **not** `abort()` — abort parks in a brake phase that only advances
+   inside the AUTO branch you just left), and the `mv_*` publish is **unconditional**, so the
+   falling edge that latches `mv_done_seq` is observable from outside AUTO. Re-gating that
+   publish on the mode would silently reintroduce the hang.
 
 4. **Depth sign: `VFR_HUD.alt` is negative below the surface.** Positive-down internally is
    fine; the wire convention is what matters. The whole companion stack compares depth against

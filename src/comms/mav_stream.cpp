@@ -147,8 +147,22 @@ static void reportEscNotDetected(const Snap& s) {
         }
 }
 
-// Per-thruster RPM → ESC_STATUS (4 ESCs/msg, so index 0 and 4 cover all 8). QGC/BlueOS
-// display these. Voltage/current unknown here (0) until the Pico reports them.
+// Per-thruster RPM. Sent as BOTH ESC_STATUS and ESC_TELEMETRY_*, for a specific reason.
+//
+// ESC_STATUS (291) is a WIP message that upstream MAVLink REMOVED from `common`. pymavlink
+// silently discards any message whose id is missing from its CRC-extra table — no error, no
+// callback — so a standard companion cannot decode it in any dialect, and the board reporting
+// RPM perfectly looks exactly like an ESC or Bluejay fault. The companion verified this on
+// pymavlink 2.4.49 against common/ardupilotmega/all/development (JETSON_FEEDBACK.md §8).
+//
+// ESC_TELEMETRY_1_TO_4 (11030) / _5_TO_8 (11031) are in the ardupilotmega dialect we already
+// vendor and include, carry exactly 4 ESCs each — an exact fit for 8 thrusters — and decode
+// everywhere. ESC_STATUS is kept alongside because QGC/BlueOS render it and Bondor already
+// consumes it; the pair costs ~140 B at 5 Hz, which is under 6 % of the link.
+//
+// Voltage/current/temperature are 0: the Pico link does not report them yet. They are real
+// fields in ESC_TELEMETRY (unlike ESC_STATUS, where we were sending float zeros), so a
+// consumer should treat 0 as "not instrumented", not "measured zero".
 static void sendEscStatus(const Snap& s, uint32_t t) {
     for (int base = 0; base < NUM_THRUSTERS; base += 4) {
         int32_t rpm[4]; float volt[4] = {0}, curr[4] = {0};
@@ -158,6 +172,25 @@ static void sendEscStatus(const Snap& s, uint32_t t) {
             (uint8_t)base, (uint64_t)t * 1000ULL, rpm, volt, curr);
         mav::tx(m);
     }
+
+    // The decodable pair. Fields are per-ESC arrays of 4: temperature (degC), voltage (cV),
+    // current (cA), totalcurrent (mAh), rpm, count. RPM is uint16 on this message, so a
+    // reversing thruster reports magnitude — the sign lives in the commanded direction, which
+    // the companion already knows.
+    uint8_t  temp[4] = {0};
+    uint16_t volt_cv[4] = {0}, curr_ca[4] = {0}, totc[4] = {0}, erpm[4] = {0}, cnt[4] = {0};
+    for (int i = 0; i < 4; ++i) erpm[i] = (uint16_t)abs((int)s.rpm[i]);
+    mavlink_message_t e1;
+    mavlink_msg_esc_telemetry_1_to_4_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &e1,
+        temp, volt_cv, curr_ca, totc, erpm, cnt);
+    mav::tx(e1);
+
+    for (int i = 0; i < 4; ++i)
+        erpm[i] = (4 + i < NUM_THRUSTERS) ? (uint16_t)abs((int)s.rpm[4 + i]) : 0;
+    mavlink_message_t e2;
+    mavlink_msg_esc_telemetry_5_to_8_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &e2,
+        temp, volt_cv, curr_ca, totc, erpm, cnt);
+    mav::tx(e2);
 }
 
 // --- individual senders ------------------------------------------------------
@@ -529,9 +562,86 @@ static void updateMove(const Snap& s, uint32_t now) {
     }
 }
 
+// --- runtime stream rates (MAV_CMD_SET_MESSAGE_INTERVAL, 511) -----------------
+//
+// These were hardcoded literals, which made the fixed 10 Hz ATTITUDE the hard ceiling for
+// every loop the companion runs — it could not turn it up for a control loop or down for a
+// slow link, and with neither 511 nor REQUEST_DATA_STREAM (66) implemented there was no
+// standard mechanism at all (JETSON_FEEDBACK.md §5).
+//
+// `ms` is the live interval; `def_ms` is what a `0` request restores. 0 in `ms` means the
+// stream is DISABLED (a -1 request), which is why the send tests below check it.
+struct StreamRate { uint32_t msgid; uint16_t ms; uint16_t def_ms; };
+static StreamRate s_rates[] = {
+    { MAVLINK_MSG_ID_HEARTBEAT,         1000, 1000 },
+    { MAVLINK_MSG_ID_SYS_STATUS,         500,  500 },
+    { MAVLINK_MSG_ID_ATTITUDE,           100,  100 },
+    { MAVLINK_MSG_ID_SCALED_IMU2,        100,  100 },
+    { MAVLINK_MSG_ID_SCALED_PRESSURE2,   200,  200 },
+    { MAVLINK_MSG_ID_VFR_HUD,            200,  200 },
+    { MAVLINK_MSG_ID_BATTERY_STATUS,    1000, 1000 },
+    { MAVLINK_MSG_ID_POWER_STATUS,      1000, 1000 },
+    { MAVLINK_MSG_ID_ESC_STATUS,         200,  200 },
+    { MAVLINK_MSG_ID_NAMED_VALUE_FLOAT,  500,  500 },
+};
+static const int N_RATES = (int)(sizeof(s_rates) / sizeof(s_rates[0]));
+
+// Floor on any requested interval. 20 ms = 50 Hz; ATTITUDE at that rate is ~1.8 kB/s, about
+// 16 % of a 115200 link. Without a floor a companion can ask for 1 kHz and starve the
+// PARAM_VALUE and COMMAND_ACK traffic that missions depend on.
+static const uint16_t RATE_MIN_MS = 20;
+static const uint16_t RATE_MAX_MS = 10000;
+
+static uint16_t rateMs(uint32_t msgid) {
+    for (int i = 0; i < N_RATES; ++i) if (s_rates[i].msgid == msgid) return s_rates[i].ms;
+    return 0;
+}
+
+bool setMessageInterval(uint32_t msgid, int32_t interval_us) {
+    // HEARTBEAT may be re-rated but never disabled, and the REFUSAL is explicit rather than
+    // being swallowed by the output-side fallback. Accepting a disable and then transmitting
+    // anyway would make GET_MESSAGE_INTERVAL report a state the vehicle is not in — the
+    // companion would believe it had silenced the one message its liveness test keys on.
+    if (msgid == MAVLINK_MSG_ID_HEARTBEAT && interval_us < 0) return false;
+    for (int i = 0; i < N_RATES; ++i) {
+        if (s_rates[i].msgid != msgid) continue;
+        if (interval_us < 0)       s_rates[i].ms = 0;                  // disable
+        else if (interval_us == 0) s_rates[i].ms = s_rates[i].def_ms;  // restore default
+        else {
+            uint32_t ms = (uint32_t)interval_us / 1000u;
+            if (ms < RATE_MIN_MS) ms = RATE_MIN_MS;
+            if (ms > RATE_MAX_MS) ms = RATE_MAX_MS;
+            s_rates[i].ms = (uint16_t)ms;
+        }
+        return true;
+    }
+    return false;   // not a stream we own -> caller replies DENIED
+}
+
+int32_t getMessageInterval(uint32_t msgid) {
+    for (int i = 0; i < N_RATES; ++i) {
+        if (s_rates[i].msgid != msgid) continue;
+        return s_rates[i].ms ? (int32_t)s_rates[i].ms * 1000 : -1;   // -1 = disabled
+    }
+    return 0;   // unknown -> "default", per the MAVLink convention
+}
+
 void update(uint32_t now) {
     static uint32_t t_hb = 0, t_sys = 0, t_att = 0, t_imu = 0,
                     t_prs = 0, t_hud = 0, t_bat = 0, t_pwr = 0, t_nvf = 0, t_diag = 0, t_esc = 0;
+    // Live intervals. HEARTBEAT is deliberately NOT allowed to be disabled: a GCS that turned
+    // it off would look identical to a dead vehicle, and the companion's own liveness test
+    // keys on it.
+    const uint16_t iv_hb  = rateMs(MAVLINK_MSG_ID_HEARTBEAT) ? rateMs(MAVLINK_MSG_ID_HEARTBEAT) : 1000;
+    const uint16_t iv_sys = rateMs(MAVLINK_MSG_ID_SYS_STATUS);
+    const uint16_t iv_att = rateMs(MAVLINK_MSG_ID_ATTITUDE);
+    const uint16_t iv_imu = rateMs(MAVLINK_MSG_ID_SCALED_IMU2);
+    const uint16_t iv_prs = rateMs(MAVLINK_MSG_ID_SCALED_PRESSURE2);
+    const uint16_t iv_hud = rateMs(MAVLINK_MSG_ID_VFR_HUD);
+    const uint16_t iv_bat = rateMs(MAVLINK_MSG_ID_BATTERY_STATUS);
+    const uint16_t iv_pwr = rateMs(MAVLINK_MSG_ID_POWER_STATUS);
+    const uint16_t iv_esc = rateMs(MAVLINK_MSG_ID_ESC_STATUS);
+    const uint16_t iv_nvf = rateMs(MAVLINK_MSG_ID_NAMED_VALUE_FLOAT);
     Snap s; snapshot(s);
 
     flushQueuedStatusText();   // auto-disarm / failsafe notices from the Core-1 loop
@@ -551,26 +661,33 @@ void update(uint32_t now) {
     // ESC_STATUS is deliberately EXEMPT: it is only ~70 B x2 at 5 Hz, and suppressing it
     // here is why the motor-test tab read 0 rpm — Bondor pulls the param list when you
     // open Setup, which is exactly when you are watching the motors.
+    //
+    // ATTITUDE is exempt for the same class of reason: it is the companion's control-loop
+    // input, and a 10-15 s blackout mid-mission is a 10-15 s hole in every host-side loop
+    // that closes on attitude. An operator opening Bondor's Setup tab must not be able to
+    // blind an autonomous run. Anything a MISSION depends on belongs above this guard;
+    // anything only a human reads belongs below it.
     if (mav_commands::paramDownloadActive()) {
-        if (now - t_hb >= 1000) { t_hb = now; sendHeartbeat(s); }
-        if (now - t_esc >= 200) { t_esc = now; sendEscStatus(s, now); }
+        if (now - t_hb >= iv_hb) { t_hb = now; sendHeartbeat(s); }
+        if (iv_esc && now - t_esc >= iv_esc) { t_esc = now; sendEscStatus(s, now); }
+        if (iv_att && now - t_att >= iv_att) { t_att = now; sendAttitude(s, now); }
         return;
     }
 
-    if (now - t_hb  >= 1000) { t_hb  = now; sendHeartbeat(s); }
-    if (now - t_sys >= 500)  { t_sys = now; sendSysStatus(s); }
-    if (now - t_att >= 100)  { t_att = now; sendAttitude(s, now); }
-    if (now - t_imu >= 100)  { t_imu = now; sendScaledImu(s, now); }
-    if (now - t_prs >= 200)  { t_prs = now; sendScaledPressure(s, now); }
-    if (now - t_hud >= 200)  { t_hud = now; sendVfrHud(s); }
-    if (now - t_bat >= 1000) {
+    if (now - t_hb  >= iv_hb) { t_hb  = now; sendHeartbeat(s); }
+    if (iv_sys && now - t_sys >= iv_sys) { t_sys = now; sendSysStatus(s); }
+    if (iv_att && now - t_att >= iv_att) { t_att = now; sendAttitude(s, now); }
+    if (iv_imu && now - t_imu >= iv_imu) { t_imu = now; sendScaledImu(s, now); }
+    if (iv_prs && now - t_prs >= iv_prs) { t_prs = now; sendScaledPressure(s, now); }
+    if (iv_hud && now - t_hud >= iv_hud) { t_hud = now; sendVfrHud(s); }
+    if (iv_bat && now - t_bat >= iv_bat) {
         t_bat = now;
         if (s.pm1_present) sendBattery(0, s.pm1, s.curr);   // current on the main battery
         if (s.pm2_present) sendBattery(1, s.pm2, 0);
     }
-    if (now - t_pwr >= 1000) { t_pwr = now; sendPowerStatus(s); }
-    if (now - t_esc >= 200)  { t_esc = now; sendEscStatus(s, now); }   // per-thruster RPM (5 Hz)
-    if (now - t_nvf >= 500) {
+    if (iv_pwr && now - t_pwr >= iv_pwr) { t_pwr = now; sendPowerStatus(s); }
+    if (iv_esc && now - t_esc >= iv_esc) { t_esc = now; sendEscStatus(s, now); }  // per-thruster RPM
+    if (iv_nvf && now - t_nvf >= iv_nvf) {
         t_nvf = now;
         sendNamed(now, "LEAK", s.leak ? 1.0f : 0.0f);
         sendNamed(now, "WTEMP", s.wtemp);

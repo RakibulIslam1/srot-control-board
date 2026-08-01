@@ -19,6 +19,17 @@ void sendAutopilotVersion();
 // Rate-scheduled telemetry. Call frequently from Task_MAVLink with millis().
 void update(uint32_t now_ms);
 
+// MAV_CMD_SET_MESSAGE_INTERVAL (511) / GET_MESSAGE_INTERVAL (510) backing.
+//
+// `interval_us`: >0 sets the interval (clamped to a sane band), 0 restores this stream's
+// compiled default, <0 disables the stream. Returns false when `msgid` is not a stream this
+// firmware emits, so the caller can answer DENIED rather than silently accepting.
+//
+// This exists because the fixed rates were the hard ceiling on every companion-side loop —
+// ATTITUDE at 10 Hz could be neither raised for a control loop nor lowered for a slow link.
+bool    setMessageInterval(uint32_t msgid, int32_t interval_us);
+int32_t getMessageInterval(uint32_t msgid);   // µs; -1 disabled, 0 unknown/default
+
 // Force one HEARTBEAT now (used on mode/arm change for snappy GCS feedback).
 void sendHeartbeatNow();
 

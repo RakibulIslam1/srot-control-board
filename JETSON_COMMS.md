@@ -83,8 +83,9 @@ AUTO moves.
 ## 5. High-level moves — `MAV_CMD_SROT_MOVE` (31000) ★
 
 One `COMMAND_LONG`, command id **31000**. Auto-enters AUTO and starts the primitive; a new command
-**preempts** the running one (a quick brake first). Braking, ramps, heading- and depth-hold are all
-on the ESP32.
+**preempts** the running one — directly, with **no brake phase between them** (the acceleration
+ramp smooths the hand-over). Send `stop` if you want the momentum nulled first. Braking, ramps,
+heading- and depth-hold are all on the ESP32.
 
 | param  | Meaning                                                                                   |
 |--------|-------------------------------------------------------------------------------------------|
@@ -105,7 +106,7 @@ on the ESP32.
 | 3  | **strafe R**| duration_s    | speed 0..1       | —                     |
 | 4  | **turn**    | degrees       | yaw rate deg/s (0 → `MOVE_YAW_RATE`) | 0 rel / 1 abs |
 | 5  | **dive**    | depth_m       | *ignored* — rate is always `MOVE_DEPTH_RATE` | —  |
-| 6  | **stop**    | —             | —                | —  (brake to a halt)  |
+| 6  | **stop**    | —             | —                | —  (brakes along the outgoing leg's axis to null momentum) |
 | 7  | **hold**    | seconds (0 = until timeout) | —  | —  (station-keep: zero translation, hold depth + heading) |
 | 8  | **style**   | count of 360° rolls | —          | —  (always ROLL at 90°/s) |
 | 9  | **arc**     | duration_s    | forward speed 0..1 | signed yaw rate deg/s |
@@ -156,8 +157,14 @@ srot_move(m, 6)                                      # stop / brake now
 
 ### Feedback contract (drives the ROS Move action)
 
-**Every command reaches exactly one terminal result.** That is now guaranteed; it was not before
-2026-07-30, when three separate paths could leave an action hanging forever (see the note below).
+**Every command reaches exactly one terminal result.**
+
+> This claim was **false between 2026-07-30 and 2026-08-01** and the companion team found it.
+> A leak / low-battery / GCS-loss failsafe — or any operator mode change — displaced AUTO
+> without ending the move, and because the `mv_*` publish was gated on AUTO, the ACK machine
+> could never observe the transition: `IN_PROGRESS` at 3 Hz, indefinitely, in exactly the
+> situations where the vehicle was already in trouble. Fixed by ending the move when AUTO is
+> taken away and publishing `mv_*` unconditionally. See `AUDIT.md` R35.
 
 - Immediately: `COMMAND_ACK(command=31000, result=MAV_RESULT_IN_PROGRESS)`.
 - While running: `COMMAND_ACK(..., IN_PROGRESS, progress=0..99)` at **~3 Hz** (`progress` = percent),
@@ -170,6 +177,11 @@ srot_move(m, 6)                                      # stop / brake now
 | `CANCELLED`, progress 0 | **Preempted** — a newer `SROT_MOVE` displaced this one | **abort** (expected; preemption is documented behaviour) |
 | `FAILED`, progress 0 | Could not start. In practice: the board refused AUTO because no depth sensor is fitted, so it fell back to STABILIZE | **abort** and check `STATUSTEXT` |
 | `DENIED` (immediate, no `IN_PROGRESS` first) | Rejected at dispatch — bad type code, or **any non-finite parameter** | **reject** |
+
+> ⚠️ **There is a fifth reply, and it is NOT terminal.** `MAV_RESULT_TEMPORARILY_REJECTED` is
+> returned when the board could not take its control mutex in time. The command never started.
+> **Retry it.** A client that treats the four above as exhaustive will wait out its whole
+> deadline on a command that was simply refused in a microsecond.
 
 A tumble / leak / over-angle safety abort disarms and ends the stream.
 
@@ -226,11 +238,19 @@ while True:
 | `NAMED_VALUE_FLOAT` | 2 Hz | see table below |
 | `STK_*`, `HEAP` | 0.5 Hz | task stack high-water + free heap (diagnostics) |
 
-> ⚠️ **During a parameter download the vehicle sends ONLY `HEARTBEAT` (1 Hz) and `ESC_STATUS`.**
-> Everything else — attitude, depth, and the `SROT_MOVE` progress ACKs — stops until the
-> `PARAM_REQUEST_LIST` completes (~10-15 s for 190+ params). A companion must **not** treat that as a
-> telemetry dropout or a stalled move. Either avoid downloading params mid-mission, or suppress the
-> watchdog while `PARAM_VALUE` messages are arriving.
+> ⚠️ **During a parameter download most telemetry is throttled**, so the download completes fast
+> and does not starve the reliable `PARAM_VALUE` sends. It lasts ~10-15 s for **227** params/cal
+> keys.
+>
+> **Still sent** (anything a *mission* depends on): `HEARTBEAT`, `ATTITUDE`, `ESC_STATUS` /
+> `ESC_TELEMETRY_*`, and the `SROT_MOVE` progress + terminal ACKs.
+> **Suppressed** (anything only a human reads): `SYS_STATUS`, `VFR_HUD`, `SCALED_IMU2`,
+> `SCALED_PRESSURE2`, `BATTERY_STATUS`, `POWER_STATUS`, `NAMED_VALUE_FLOAT`.
+>
+> `ATTITUDE` was added to the exempt list on 2026-08-01: it is the companion's control-loop
+> input, and a 10-15 s hole in it because an operator opened a Setup tab is not acceptable
+> mid-mission. Depth (`VFR_HUD`) is still suppressed — if you need it during a download, raise
+> its rate is not enough; avoid the download instead.
 
 > **Battery note:** `BATTERY_STATUS` id 0 is the **SBC/electronics** pack (local ADC); id 1 is the
 > **thruster** pack, which arrives from a 2nd board over ESP-NOW (`env:second-board`). id 1 is
@@ -278,7 +298,7 @@ attitude hold. It is the escape hatch, not a driving mode. Fly `STABILIZE`.
 
 | name       | Meaning                                                             |
 |------------|---------------------------------------------------------------------|
-| `MV_STATE` | movement phase: 0 idle · 1 cruise · 2 brake · 3 turn · 4 dive · 5 style · 6 done |
+| `MV_STATE` | movement phase: 0 idle · 1 cruise · 2 brake · 3 turn · 4 dive · 5 style · **6 hold** · **7 done** |
 | `MV_PROG`  | move progress 0..1                                                   |
 | `MV_TYPE`  | active `movement::Type` (1 fwd … 10 arc; 0 = idle)                  |
 | `LEAK`     | leak detected (1/0)                                                  |
@@ -388,8 +408,14 @@ as an integer).
 ### Things that will bite you
 - **A re-sent `SROT_MOVE` re-runs.** Start is edge-triggered on `mv_seq`, which increments per
   accepted command — there is no idempotency key. Send once and track the ACK.
-- **A new move preempts the running one.** There is no queue.
-- `MV_STATE` / `mv_active` are only published while the mode is **AUTO**.
+- **A new move preempts the running one.** There is no queue, and there is **no separate brake
+  phase between the two** — the hand-over is direct. (An earlier revision of this document
+  claimed "a quick brake first". It never did that. What *is* true as of 2026-08-01 is that a
+  preempting **`stop`** brakes properly, because `start()` now carries the outgoing leg's travel
+  axis and speed forward — see the `stop` row in the p1 table.)
+- `MV_STATE` / `mv_active` are published **unconditionally**, not only in AUTO. That is
+  deliberate: the transition an ACK most needs to observe is a move ending *because AUTO was
+  taken away*, and gating the publish on AUTO made exactly that case invisible.
 - On completion `MV_TYPE` is **not** re-sent; you get `MV_STATE = 0` and `MV_PROG = 1.0`.
 - Autotune and motor-tune now **require ARMED**, and **disarming aborts them** (as does leaving the
   mode). Motor test no longer auto-disarms when you stop sending the keep-alive.
