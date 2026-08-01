@@ -26,8 +26,19 @@ void apply(float& roll, float& pitch, float& yaw, float& throttle,
     const bool stabilized = (mode == FlightMode::STABILIZE || mode == FlightMode::ACRO ||
                              mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE ||
                              mode == FlightMode::AUTO);
-    const bool angle_hold = (mode == FlightMode::STABILIZE ||
-                             mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE);
+    // `angle_hold` gates TRIM LEARNING, and the rule it encodes is "a human is on the sticks,
+    // so centred sticks are evidence of a steady trim state". State it that way rather than
+    // enumerating the allowed modes: the caller's `learn` flag is only "sticks are centred"
+    // and is mode-blind, so an autonomous mode that never drives sp_* leaves it permanently
+    // true and the CoB auto-trim learns against machine-commanded effort. AUTO was excluded
+    // by name for exactly this reason; the next autonomous mode (the vision primitive in
+    // VISION_API.md) would have had to remember to add itself. Inverting the test means it
+    // cannot be forgotten — a new mode is excluded until someone deliberately includes it.
+    const bool pilot_mode = (mode == FlightMode::STABILIZE || mode == FlightMode::ACRO ||
+                             mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE ||
+                             mode == FlightMode::MANUAL);
+    const bool angle_hold = pilot_mode && (mode != FlightMode::ACRO) &&
+                            (mode != FlightMode::MANUAL);
     const bool depth_mode = (mode == FlightMode::DEPTH_HOLD || mode == FlightMode::SURFACE);
 
     // 1) Angular drag feedforward — rotational drag is ~quadratic in rate (τ_drag ∝

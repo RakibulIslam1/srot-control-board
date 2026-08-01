@@ -517,6 +517,21 @@
 
 // Failsafe
 #define GCS_FAILSAFE_MS         5000        // no GCS HEARTBEAT for this long → failsafe
+// Pilot-stick (MANUAL_CONTROL) staleness. Full authority until MANUAL_FRESH_MS, then a linear
+// ramp to neutral by MANUAL_DECAY_MS. A ramp, not a cliff: a cliff would make normal piloting
+// lurch on a single dropped packet, and the point is to stop driving on stale intent, not to
+// punish jitter. Both well inside GCS_FAILSAFE_MS so the sticks are already neutral by the
+// time the link failsafe fires. Any real teleop sends at >=10 Hz, so this never engages in
+// normal use — it engages exactly when the sender has stopped.
+#define MANUAL_FRESH_MS         1000
+#define MANUAL_DECAY_MS         1500
+// Failsafe end state. A SURFACE failsafe does not disarm, so without this the vehicle sits
+// armed and station-keeping at 0 m for ever after a permanent link loss. Disarm once the
+// depth has stayed above FS_SURFACE_DEPTH_M continuously for FS_SURFACE_HOLD_MS — the hold
+// is what stops a wave slapping the sensor from disarming a vehicle that is still deep.
+// Only applies with a working depth sensor; the blind open-loop ascent keeps pushing.
+#define FS_SURFACE_DEPTH_M      0.25f       // m — "at the surface" (positive-down)
+#define FS_SURFACE_HOLD_MS      5000
                                             // (5 s tolerates a few missed beats over lossy LoRa;
                                             //  USB/UDP heartbeat at 1 Hz reliably, so still safe)
 

@@ -4,7 +4,7 @@
 //
 //  ONE definition shared by BOTH firmwares (ESP32 `src/` and `pico_thruster/`)
 //  so the command/telemetry frame format can never drift. Fixed-length,
-//  little-endian, header + CRC16 framed over UART @ 2 Mbaud, request/response
+//  little-endian, header + CRC16 framed over UART @ 1 Mbaud, request/response
 //  at the 500 Hz control rate:
 //     ESP32 --Command--> Pico    (8 thruster setpoints + flags)
 //     Pico  --Telemetry-> ESP32  (8 RPMs + per-ESC status + fault mask)

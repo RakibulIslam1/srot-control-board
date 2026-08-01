@@ -72,6 +72,24 @@ static void readInputs(LoopIn& in) {
             in.mv_type = c.mv_type; in.mv_primary = c.mv_primary; in.mv_speed = c.mv_speed;
             in.mv_aux = c.mv_aux; in.mv_submode = c.mv_submode; in.mv_timeout = c.mv_timeout;
             in.mv_seq = c.mv_seq;
+
+            // Age out the pilot sticks. Applied HERE, once, so every mode downstream sees
+            // decayed intent without needing to know about it — rather than adding a
+            // freshness test to each of six mode branches and forgetting one.
+            //
+            // A stale stick is not a held stick: it means nobody is driving. Keeping the last
+            // value is how a GCS-loss failsafe ended up ascending while still translating on
+            // the final packet. Ramp rather than cliff — see MANUAL_FRESH_MS.
+            const uint32_t sp_age = (c.sp_stamp_ms != 0) ? (millis() - c.sp_stamp_ms) : UINT32_MAX;
+            float sp_auth = 1.0f;
+            if (c.sp_stamp_ms == 0 || sp_age >= MANUAL_DECAY_MS)      sp_auth = 0.0f;
+            else if (sp_age > MANUAL_FRESH_MS)
+                sp_auth = 1.0f - (float)(sp_age - MANUAL_FRESH_MS) /
+                                 (float)(MANUAL_DECAY_MS - MANUAL_FRESH_MS);
+            if (sp_auth < 1.0f) {
+                in.sp_roll *= sp_auth; in.sp_pitch *= sp_auth; in.sp_yaw *= sp_auth;
+                in.sp_throttle *= sp_auth; in.sp_forward *= sp_auth; in.sp_lateral *= sp_auth;
+            }
         }
     }
     {
@@ -168,7 +186,20 @@ static void computeDemands(const LoopIn& in, float dt,
 
         case FlightMode::SURFACE: {
             // Hold attitude and drive depth target to the surface (0 m).
-            attitude::stabilize(0, 0, in.sp_yaw,
+            //
+            // TRANSLATION AND YAW ARE ZEROED. SURFACE is a failsafe destination — reached on
+            // leak, low thruster battery, or GCS loss — and on the GCS-loss case the last
+            // sticks are stale by definition. This used to inherit fwd/lat from the
+            // unconditional block above and pass in.sp_yaw straight through, so the vehicle
+            // ascended while continuing to translate and yaw on whatever the last packet
+            // said, indefinitely. A vehicle that has lost its operator should not still be
+            // driving somewhere. (JETSON_FEEDBACK.md §3.)
+            //
+            // Belt and braces with the staleness ramp in readInputs(): that handles a sender
+            // that went quiet, this handles a sender that is still talking while the vehicle
+            // is surfacing for an unrelated reason (a leak with the pilot still on the sticks).
+            fwd = 0; lat = 0;
+            attitude::stabilize(0, 0, 0,
                                 in.roll, in.pitch, in.yaw, in.gx, in.gy, in.gz, dt,
                                 roll, pitch, yaw);
             if (in.depth_ok) {
@@ -390,11 +421,45 @@ void Task_ControlLoop(void* pv) {
                 if (lk.ok() && g_state.cal.routine == CalRoutine::MOTOR_DETECT)
                     g_state.cal.routine = CalRoutine::NONE;
             }
+            // Leaving AUTO must END the running move, or it is stranded on IN_PROGRESS for
+            // ever and the companion's action hangs. (JETSON_FEEDBACK.md §1 — their highest
+            // severity item, and it fires exactly when the vehicle is already in trouble.)
+            //
+            // Displace AUTO mid-move and the mv_* publish at the bottom of this loop stops
+            // running, so mv_active freezes true and mv_done_seq never advances — and
+            // mav_stream's done-condition `(mv_done_seq == s_seq) || (s_seen_active &&
+            // !mv_active)` then has BOTH terms permanently false. The un-started escape hatch
+            // there needs !s_seen_active, so it cannot rescue a move that had already begun.
+            // Nothing else writes those fields: COMMAND_ACK IN_PROGRESS at 3 Hz, for ever.
+            //
+            // cancel(), NOT abort(): abort() parks the command in PH_BRAKE, which only
+            // advances inside movement::update() — and update() is only reached from the AUTO
+            // branch we are leaving. It would swap one permanent non-terminal state for
+            // another. See movement.h.
+            //
+            // This one hook covers BOTH ways AUTO is displaced. An operator/GCS mode change
+            // arrives through readInputs(). A failsafe forces the mode further down this same
+            // loop, after this block has run — so it is caught on the next cycle (2 ms later),
+            // by which point computeDemands() has already stopped calling movement::update().
+            if (prev_mode == FlightMode::AUTO && in.mode != FlightMode::AUTO) {
+                movement::cancel();
+            }
             prev_mode = in.mode;
         }
 
         // AUTO: start a new movement command on a rising mv_seq (from Task_MAVLink). A new
-        // command preempts the current one (the ramp smooths the transition).
+        // command preempts the current one.
+        //
+        // start() now carries the outgoing leg's travel axis and speed forward (see the
+        // capture in movement::start), so a preempting STOP brakes the momentum it inherited
+        // instead of coasting. For every other verb the acceleration ramp smooths the
+        // transition as before.
+        //
+        // JETSON_COMMS.md claimed preemption did "a quick brake first". It never did — there
+        // is no null-momentum phase between the two commands, just a direct hand-over. Rather
+        // than insert a brake (which would add an unbounded stall to every mission sequence,
+        // and the companion sequences legs back-to-back deliberately), the doc is corrected to
+        // describe what actually happens. See Stage C3 of the L0 plan.
         if (in.mode == FlightMode::AUTO && in.mv_seq != prev_mv_seq) {
             movement::start((movement::Type)in.mv_type, in.mv_primary, in.mv_speed,
                             in.mv_submode, in.mv_aux, in.mv_timeout, in.yaw, in.depth);
@@ -518,7 +583,21 @@ void Task_ControlLoop(void* pv) {
         // Declared OUTSIDE the mode guard so it can be cleared while already surfacing —
         // see the else branch at the bottom.
         static uint32_t s_bat_low_since = 0;
+        // Was SURFACE entered BY A FAILSAFE, or did the operator ask for it?
+        //
+        // The auto-disarm below must only apply to the failsafe case. SURFACE is a normal,
+        // directly selectable mode (JS_MODE_SURFACE / DO_SET_MODE 9), and a pilot who chooses
+        // it to end a dive and hold at the top would otherwise be disarmed out from under
+        // themselves after FS_SURFACE_HOLD_MS. Nothing in ControlState distinguishes the two,
+        // so the distinction is latched here, where the failsafe actually forces the mode.
+        static bool     s_fs_surface = false;
+        static uint32_t s_at_surface_since = 0;
         if (in.mode != FlightMode::SURFACE) {
+            // Left SURFACE (operator, or the failsafe cleared and something re-selected a
+            // mode). Drop both latches: the next surfacing must observe its own full hold
+            // window, not inherit a timestamp from a previous one.
+            s_fs_surface = false;
+            s_at_surface_since = 0;
             bool fs = false;
             const char* fs_why = nullptr;
             // Kept in lockstep with fs_why: every branch that assigns fs_why also assigns
@@ -570,6 +649,7 @@ void Task_ControlLoop(void* pv) {
                 StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
                 if (lk.ok()) g_state.control.mode = FlightMode::SURFACE;
                 in.mode = FlightMode::SURFACE;
+                s_fs_surface = true;     // this surfacing is the failsafe's, not the pilot's
                 if (fs_why != s_fs_last) {           // was silent: it just started surfacing
                     s_fs_last = fs_why;
                     // 64, not more: queueStatusText copies into a 64-byte queue slot, so a
@@ -589,6 +669,34 @@ void Task_ControlLoop(void* pv) {
                 s_fs_last = nullptr;
             }
         } else {
+            // ALREADY SURFACING. Decide the end state, or there isn't one: a failsafe forces
+            // SURFACE without disarming, so a permanent link loss left the vehicle armed and
+            // station-keeping at 0 m indefinitely — thrusters live, nobody watching, until
+            // the battery ran out. (JETSON_FEEDBACK.md §4.)
+            //
+            // Once at the surface and settled, disarm. Gated on a real depth reading: with no
+            // Bar30 the ascent is open-loop (DEPTH_LOST_ASCENT) and "am I at the surface?" is
+            // unanswerable, so we keep pushing up rather than disarm at an unknown depth and
+            // sink. Requires the depth to stay shallow continuously, so a wave slapping the
+            // sensor cannot disarm a vehicle that is still 2 m down.
+            //
+            // s_fs_surface gates the whole thing: a pilot who SELECTS SurfaceMode is not
+            // failsafing and must keep their thrusters. Both latches are cleared on leaving
+            // SURFACE, so every failsafe surfacing observes its own full hold window.
+            if (s_fs_surface && in.armed && in.depth_ok && in.depth < FS_SURFACE_DEPTH_M) {
+                uint32_t ns = millis();
+                if (s_at_surface_since == 0) s_at_surface_since = ns;
+                if (ns - s_at_surface_since >= FS_SURFACE_HOLD_MS) {
+                    s_at_surface_since = 0;
+                    StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
+                    if (lk.ok()) g_state.control.armed = false;
+                    in.armed = false;
+                    mav_stream::queueStatusText(MAV_SEVERITY_CRITICAL,
+                                                "Failsafe: surfaced - disarmed");
+                }
+            } else {
+                s_at_surface_since = 0;
+            }
             // Already surfacing, so everything above is skipped and the debounce timer would
             // freeze at an already-expired value — leaving SURFACE with the pack still low
             // would then re-trip on the very next cycle with no fresh window observed. Clear
@@ -755,8 +863,15 @@ void Task_ControlLoop(void* pv) {
             if (lk.ok()) g_state.control.loop_stamp_ms = millis();
         }
 
-        // Publish AUTO movement state for Task_MAVLink (ACK progress/complete + telemetry).
-        if (in.mode == FlightMode::AUTO) {
+        // Publish movement state for Task_MAVLink (ACK progress/complete + telemetry).
+        //
+        // UNCONDITIONAL, deliberately. This used to be gated on `in.mode == AUTO`, which meant
+        // the one transition the ACK machine most needs to observe — a move ending because
+        // AUTO was taken away — was the one it could never see. The falling edge below is what
+        // latches mv_done_seq, and it has to be reachable from outside AUTO for the cancel()
+        // above to mean anything. Outside AUTO the movement is idle, so this simply publishes
+        // "not active" and the edge fires exactly once.
+        {
             bool now_active = (movement::type() != movement::Type::NONE);
             StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(1));
             if (lk.ok()) {
@@ -765,7 +880,9 @@ void Task_ControlLoop(void* pv) {
                 g_state.control.mv_progress = movement::progress();
                 if (mv_was_active && !now_active) g_state.control.mv_done_seq = prev_mv_seq;  // completed
             }
-            mv_was_active = now_active;
+            // Only advance the edge tracker when the write landed. On a lock miss the state
+            // was not published, so clearing mv_was_active here would drop the completion.
+            if (lk.ok()) mv_was_active = now_active;
         }
 
         vTaskDelayUntil(&last, period);

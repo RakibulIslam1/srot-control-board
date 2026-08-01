@@ -145,6 +145,13 @@ struct ControlState {
     float       sp_forward = 0;      // surge
     float       sp_lateral = 0;      // sway
     float       sp_depth_m = 0;      // depth target (DEPTH_HOLD)
+    // Freshness for the pilot setpoints above. MANUAL_CONTROL was the ONLY external input
+    // in this firmware without the value+stamp+valid triple every other one carries, and it
+    // is the one where staleness is most dangerous: on a GCS-loss failsafe the last sticks
+    // are stale BY DEFINITION, and nothing zeroed them — so the vehicle ascended while still
+    // translating and yawing on whatever the last packet happened to say.
+    // 0 = never received. millis() AT RECEIPT, taken on Core 0.
+    uint32_t    sp_stamp_ms = 0;
 
     // PID outputs fed into the mixer (torque/force demands)
     float       out_roll = 0, out_pitch = 0, out_yaw = 0;

@@ -24,7 +24,7 @@ is noted at the end.
    │ GP6..GP13 →ESC1..8  │   └───────────▶│     ESP32      │        │
    │  (pull-up optional) │                │                │        │
    │ GP1 ←ESP32 GPIO17   │◀── UART2 ─────▶│ GPIO17→ GP1    │        │
-   │ GP0 →ESP32 GPIO16   │   2 Mbaud      │ GPIO16← GP0    │        │
+   │ GP0 →ESP32 GPIO16   │   1 Mbaud      │ GPIO16← GP0    │        │
    │ GP15←ESP32 GPIO27   │◀── e-stop ─────│ GPIO27→ GP15   │        │
    │ core0 DShot+RPM PI  │                │  ┌─ sensors ─┐ │        │
    │ core1 UART link     │                │  I2C0 21/22   │        │
@@ -215,7 +215,7 @@ Example: `BUZZ_MASK = 254` keeps everything but the startup tune; `BUZZ_MASK = 0
 | I2C1 (Wire1) | 25/26 | 100 kHz | SH1106 OLED `0x3C`, PCA9685 `0x40` |
 | VSPI | 18/19/23 | — | LoRa (SX127x, CS 5, DIO0 34), SD card (CS 33) |
 | UART0 | 1/3 | 115200 | MAVLink ↔ BlueOS/QGC |
-| UART2 | 17/16 | 2 Mbaud | ESP32 ↔ Pico thruster link |
+| UART2 | 17/16 | 1 Mbaud | ESP32 ↔ Pico thruster link |
 
 ## PCA9685 aux channels (16, on I2C1)
 Each channel's role is runtime via the **`SERVOn_ROLE`** parameter: `0` = off, `1` = PWM

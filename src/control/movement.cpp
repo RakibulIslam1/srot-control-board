@@ -18,6 +18,13 @@ static float    s_speed = 0, s_cur_speed = 0;   // commanded / ramped translatio
 static float    s_uf = 0, s_ul = 0;             // surge / sway axis signs
 static float    s_yaw_rate = 0;                 // deg/s (turn or arc)
 static float    s_target_yaw = 0;               // rad (absolute turn goal)
+// Progress support for the two CLOSED-LOOP phases. TURN and DIVE finish on an error test, not
+// a timer, so there is no duration to divide by — they both used to fall through progress()'s
+// `default:` and report a constant 0.5. Those are the two verbs a mission most wants to wait
+// on (JETSON_FEEDBACK.md §6), so MV_PROG and COMMAND_ACK.progress carried no information
+// exactly where they mattered. `s_span` is the distance to cover latched at start; `s_remain`
+// is refreshed by update() from the same error the completion test already computes.
+static float    s_span = 0, s_remain = 0;
 static float    s_depth_ramp = 0, s_depth_goal = 0;   // smoothed / commanded depth setpoint
 static bool     s_running = false;
 // Pending one-shot heading lock, emitted on the next update() and then cleared.
@@ -50,12 +57,19 @@ void enter(float cur_depth) {
 
 void start(Type t, float primary, float speed, uint8_t submode, float aux,
            float timeout_s, float cur_yaw, float cur_depth) {
-    (void)cur_depth;
     s_type = t; s_start_ms = millis(); s_running = true;
     s_timeout_ms = (timeout_s > 0) ? (uint32_t)(timeout_s * 1000.0f) : 60000;
     s_speed = constrain(speed, 0.0f, g_params.move_cruise_max);
     s_depth_goal = s_depth_ramp;                 // hold depth unless DIVE
+    // Capture the OUTGOING leg's travel axis and speed before they are cleared: STOP has to
+    // brake along the axis it is stopping, and this reset ran before the type switch, so
+    // PH_BRAKE computed `-0 * gain * 0` = zero thrust. "Brake to a halt" was a coast.
+    // (JETSON_FEEDBACK.md §2 — and only the wire verb was affected, because abort() never
+    // touched these fields, so internal preemption braked correctly the whole time.)
+    const int8_t prev_uf = s_uf, prev_ul = s_ul;
+    const float  prev_speed = s_cur_speed;
     s_uf = s_ul = 0; s_yaw_rate = 0;
+    s_span = s_remain = 0;
 
     // Lock the heading this command starts with. Every verb that is not itself a
     // heading change gets it, so "go forward 3 s" cannot yaw away mid-leg: the
@@ -80,14 +94,32 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
             s_yaw_rate = (speed > 1.0f) ? speed : g_params.move_yaw_rate;   // deg/s
             s_target_yaw = (submode == 1) ? (primary * (float)M_PI / 180.0f)               // absolute
                                           : wrapPi(cur_yaw + primary * (float)M_PI / 180.0f); // relative
+            s_span = s_remain = fabsf(wrapPi(s_target_yaw - cur_yaw));   // for progress()
             s_phase = PH_TURN; return;
-        case Type::DIVE:  s_depth_goal = primary; s_phase = PH_DIVE; return;
+        case Type::DIVE:
+            // Clamp to at or below the surface. JETSON_COMMS.md documented DIVE p2 as
+            // "clamped at >= 0 — you cannot command above the surface" and it was not:
+            // depth::setTarget() has no clamp either, and the AUTO path never reaches the
+            // one inside depth::update(). A negative target produced sustained ascent — and
+            // because the runaway guard references depth::target(), the guard TRACKED the
+            // bad setpoint instead of catching it. (JETSON_FEEDBACK.md §7.)
+            s_depth_goal = (primary > 0.0f) ? primary : 0.0f;
+            s_span = s_remain = fabsf(s_depth_goal - cur_depth);          // for progress()
+            s_phase = PH_DIVE; return;
         case Type::STYLE: {
             int n = (int)primary; if (n < 1) n = 1;
             stunt::start(StuntAxis::ROLL, n * 360.0f, 90.0f);
             s_phase = PH_STYLE; return;
         }
-        case Type::STOP:  s_phase = PH_BRAKE; s_brake_ms = brakeMs(s_cur_speed); return;
+        case Type::STOP:
+            // Restore the outgoing leg's axis and speed so PH_BRAKE has something to push
+            // against — see the capture at the top of this function. Without this the verb
+            // held zero translation for the brake window and the vehicle coasted, which on a
+            // hull with no position or velocity estimate is unrecoverable state: nothing on
+            // board or on the host knows how far it travelled.
+            s_uf = prev_uf; s_ul = prev_ul;
+            s_speed = prev_speed;                    // PH_BRAKE scales by s_speed, not s_cur_speed
+            s_phase = PH_BRAKE; s_brake_ms = brakeMs(prev_speed); return;
         case Type::HOLD:
             // Station-keep: zero translation, hold the depth latched above and let the
             // attitude loop hold heading (a centred yaw demand latches the current
@@ -111,6 +143,14 @@ void abort() {
     s_brake_ms = brakeMs(s_cur_speed); s_running = true;
     // Don't re-latch a heading here: abort is a safety/preemption path and the current
     // hold target is already the right one to brake against.
+}
+
+// See the header for why this is not abort(). Straight to the idle terminal state so
+// type() reports NONE on the very next publish and the ACK machine can resolve the move.
+void cancel() {
+    s_type = Type::NONE; s_phase = PH_IDLE; s_running = false;
+    s_cur_speed = 0; s_uf = s_ul = 0; s_yaw_rate = 0;
+    s_yaw_lock_pending = false;
 }
 
 Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
@@ -157,6 +197,7 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
         }
         case PH_TURN: {
             float err = wrapPi(s_target_yaw - yaw);
+            s_remain = fabsf(err);          // progress() divides this by the latched span
             if (fabsf(err) < 0.03f) {
                 d.yaw = 0; s_phase = PH_DONE;
                 // Hold the heading we were ASKED for, not the one the ~1.7° completion
@@ -171,6 +212,7 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
             break;
         }
         case PH_DIVE:
+            s_remain = fabsf(depth - s_depth_goal);   // progress() divides by the latched span
             if (fabsf(s_depth_ramp - s_depth_goal) < 0.01f && fabsf(depth - s_depth_goal) < 0.15f)
                 s_phase = PH_DONE;
             break;
@@ -209,6 +251,13 @@ float progress() {
         case PH_BRAKE:  return 0.9f + (s_brake_ms ? 0.1f * constrain((float)(now - s_start_ms) / (float)s_brake_ms, 0.0f, 1.0f) : 0.1f);
         case PH_STYLE:  return stunt::progress();
         case PH_HOLD:   return s_dur_ms ? constrain((float)(now - s_start_ms) / (float)s_dur_ms, 0.0f, 0.99f) : 0.5f;
+        // TURN and DIVE are closed-loop, so progress is the fraction of the latched span
+        // covered, not elapsed time. Capped at 0.99 like PH_HOLD: only the terminal state
+        // reports 1.0, so a client can distinguish "nearly there" from "done".
+        case PH_TURN:
+        case PH_DIVE:   return (s_span > 1e-3f)
+                               ? constrain(1.0f - s_remain / s_span, 0.0f, 0.99f)
+                               : 0.99f;   // asked to go where we already are
         default:        return 0.5f;
     }
 }

@@ -485,6 +485,23 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
             return MAV_RESULT_ACCEPTED;
         }
 
+        case MAV_CMD_SET_MESSAGE_INTERVAL:
+            // p1 = msgid, p2 = interval µs (>0 set, 0 default, <0 disable). The companion's
+            // whole loop rate ceiling was this command's absence.
+            return mav_stream::setMessageInterval((uint32_t)p[0], (int32_t)p[1])
+                   ? MAV_RESULT_ACCEPTED : MAV_RESULT_DENIED;
+
+        case MAV_CMD_GET_MESSAGE_INTERVAL: {
+            // Reply in the ACK's param field is not a thing, so answer the way ArduPilot
+            // does: emit the current value as a MESSAGE_INTERVAL message.
+            uint32_t id = (uint32_t)p[0];
+            mavlink_message_t m;
+            mavlink_msg_message_interval_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
+                                              (uint16_t)id, mav_stream::getMessageInterval(id));
+            mav::tx(m);
+            return MAV_RESULT_ACCEPTED;
+        }
+
         case MAV_CMD_REQUEST_MESSAGE:
             if ((uint32_t)p[0] == MAVLINK_MSG_ID_AUTOPILOT_VERSION) {
                 mav_stream::sendAutopilotVersion();
@@ -555,9 +572,14 @@ static void onParamSet(const mavlink_message_t& msg) {
         if (!persisted) {
             // Applied and live, but it will NOT survive a reboot. Silence here meant the
             // operator tuned in the pool, power-cycled, and lost it with no clue why.
+            // ERROR, not WARNING. A companion has no other way to observe a failed write —
+            // PARAM_VALUE still echoes the accepted value, so from its side the set looks
+            // fine and then silently reverts at the next boot. They lost a whole pool
+            // session to exactly this: a JS_GAIN_DEFAULT = 1.0 write that never persisted,
+            // leaving MANUAL_CONTROL at half authority with nothing to indicate it.
             char wb[64];
             snprintf(wb, sizeof(wb), "%s set but NOT saved (NVS full?)", name);
-            mav_stream::sendStatusText(MAV_SEVERITY_WARNING, wb);
+            mav_stream::sendStatusText(MAV_SEVERITY_ERROR, wb);
         }
         // ATUNE is a momentary trigger: setting it ≥1 starts the relay auto-tune.
         if (strncmp(name, "ATUNE", 16) == 0 && ps.param_value >= 1.0f) {
@@ -633,6 +655,8 @@ static void onManualControl(const mavlink_message_t& msg) {
             g_state.control.sp_lateral  = (y / 1000.0f) * gain;
             g_state.control.sp_throttle = ((z - 500.0f) / 500.0f) * gain;
             g_state.control.sp_yaw      = (r / 1000.0f) * gain;
+            // Stamp AT RECEIPT so the flight loop can age these out. See sp_stamp_ms.
+            g_state.control.sp_stamp_ms = millis();
         }
     }
 
