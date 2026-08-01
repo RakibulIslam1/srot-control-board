@@ -201,6 +201,50 @@ Two answers to your open questions while they are fresh:
 
 ---
 
+## ⛔ READ FIRST — your drift test will NOT catch the `MOVE_STOP` fix
+
+We ran your `test_srot_protocol_drift.py` against this firmware with
+`SROT_FW_DIR` pointed at it. **All 7 tests pass — including
+`test_stop_still_does_not_apply_reverse_thrust`.**
+
+That test is green and the behaviour has changed underneath it. It greps the `Type::STOP`
+case for `abort()`; we fixed MOVE_STOP by restoring the outgoing leg's axis and speed, which
+`start()` had zeroed before the switch.
+
+**So: remove `SrotFC._brake_last_leg` before flying this, or the hull brakes twice.** Your
+tripwire cannot tell you.
+
+Worth knowing for the record: routing `Type::STOP` through `abort()` — the fix your docstring
+suggests — would **not** have worked on its own. `start()` zeroes `s_uf`/`s_ul`/`s_speed`
+before the type switch and `abort()` does not restore them, so `PH_BRAKE` would still have
+computed `-0 × gain × 0`. The reset had to move regardless of which entry point you use.
+
+### The fix for the fix: assert on behaviour, not on our source text
+
+`include/config.h` now carries an explicit revision, bumped deliberately whenever observable
+behaviour a partner has worked around changes:
+
+```c
+#define SROT_FW_BEHAVIOUR_REV   2
+```
+
+Suggested replacement for the brittle assertion:
+
+```python
+# in srot_protocol.py, parsed from the firmware header like your other constants
+FW_BEHAVIOUR_REV = 2
+
+# in test_srot_protocol_drift.py
+def test_host_brake_workaround_is_still_needed():
+    """REV 2 fixed MOVE_STOP. Above it, our host brake is a double brake."""
+    assert sp.FW_BEHAVIOUR_REV < 2, (
+        'firmware REV >= 2 brakes on MOVE_STOP -- remove SrotFC._brake_last_leg')
+```
+
+Rev meanings are documented next to the define. We will bump it for anything you might have a
+workaround for; a plain source-text grep cannot survive us fixing something a different way
+than you predicted, and this one already did not.
+
 ## One extra fix you did not ask for, because we found it on the bench
 
 **Every completed move was re-sending its terminal ACK at ~14 Hz, for ever** (`AUDIT.md` R44).
