@@ -567,6 +567,30 @@
 // NOT bumped for the CAL_*/MAG_* params: they are additions, so existing tuning survives.
 #define PARAM_DEFAULTS_VER      4
 #define NVS_KEY_DEFAULTS_VER    "p_defver"
+
+// -----------------------------------------------------------------------------
+// FIRMWARE BEHAVIOUR REVISION — the cross-repo coordination signal
+// -----------------------------------------------------------------------------
+// INCREMENT whenever a change alters OBSERVABLE BEHAVIOUR that a partner repo has
+// written a workaround for. This is what `duburi_ws` should assert on.
+//
+// Why this exists: their `test_srot_protocol_drift.py` detects our fixes by pattern-matching
+// our C++ source — e.g. it greps the `Type::STOP` case for `abort()` to decide whether
+// MOVE_STOP still coasts. We fixed MOVE_STOP a different (and necessary) way, so their
+// tripwire stayed green while the behaviour changed underneath it. A companion trusting it
+// would have kept its host-side brake and braked the hull twice.
+//
+// Source text is a brittle proxy for behaviour. A number we bump deliberately is not.
+//
+//   1  Pre-2026-08-01. MOVE_STOP coasts (applies zero braking thrust). A move can be
+//      stranded on IN_PROGRESS for ever when a failsafe or mode change displaces AUTO.
+//      No SET_MESSAGE_INTERVAL. ESC_STATUS only. DIVE target not clamped.
+//   2  2026-08-01 (AUDIT.md R35-R44). MOVE_STOP brakes along the outgoing leg's axis —
+//      REMOVE any host-side brake workaround. Every move reaches exactly one terminal ACK,
+//      sent ONCE. SET_MESSAGE_INTERVAL/GET_MESSAGE_INTERVAL implemented. ESC_TELEMETRY_1_TO_4
+//      and _5_TO_8 emitted alongside ESC_STATUS. DIVE clamped >= 0. TURN/DIVE report real
+//      progress. SURFACE zeroes pilot translation/yaw; MANUAL_CONTROL ages out to neutral.
+#define SROT_FW_BEHAVIOUR_REV   2
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
