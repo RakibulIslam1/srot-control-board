@@ -82,7 +82,8 @@ failsafe have no data and stay inert.
 | **[DUBURI_WS_INTEGRATION.md](DUBURI_WS_INTEGRATION.md)** | Porting the duburi_ws ROS 2 stack onto this board |
 | **[VISION_API.md](VISION_API.md)** | ⭐ Vision-guided control spec — bearings in, 500 Hz loop on-board (**not yet implemented**) |
 | **[JETSON_FEEDBACK.md](JETSON_FEEDBACK.md)** | Findings sent to us *by* the companion team, ranked by what blocks them |
-| **[DUBURI_WS_HANDOFF_2026-08-01.md](DUBURI_WS_HANDOFF_2026-08-01.md)** | ⭐ **Start here if you are the firmware agent.** What the companion changed after merging our PR, the bench measurements they will send back, and the one finding we owe them: **the depth gate covers every AUTO move, not just dive verbs** |
+| **[TASKS_FROM_DUBURI_WS.md](TASKS_FROM_DUBURI_WS.md)** | ⭐⭐ **START HERE — the run sheet.** Board-on-the-bench checks (§0: behaviour rev + the `GAIN 0.500` re-write), then the depth-gate wording fix, `FS_GCS_SYSID` (now unblocked — the companion moved to compid 191), and LEAK → `SYS_STATUS`. Ends with how to PR back |
+| **[DUBURI_WS_HANDOFF_2026-08-01.md](DUBURI_WS_HANDOFF_2026-08-01.md)** | The reasoning behind that run sheet: what the companion changed after merging our PR, the bench measurements they will send back, and the one finding we owe them — **the depth gate covers every AUTO move, not just dive verbs** |
 | **[AGENTS.md](AGENTS.md)** | Working rules for agents/devs + the invariants co-owned with the sibling repos |
 | **[AUDIT.md](AUDIT.md)** | Firmware audit: findings, evidence, and what was fixed |
 | **[docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md)** | Honest comparison — including where ArduSub is still ahead |
