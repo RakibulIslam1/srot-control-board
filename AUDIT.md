@@ -173,6 +173,35 @@ companion had already acted on.
 logic). Five audit rounds read the function and missed it; twelve seconds of bench traffic
 found it. Worth remembering the next time a review feels thorough.
 
+## R45 — the behaviour revision existed but was not reachable from the vehicle
+
+Found by the adversarial review of the companion-side PR, and it is the same class of mistake
+as R44: the artefact existed, but not where it had to be.
+
+R35–R44 introduced `SROT_FW_BEHAVIOUR_REV` precisely because grepping our C++ from `duburi_ws`
+had already failed silently once. The replacement we proposed was a **pytest that reads
+`include/config.h` off disk** — and that test is `skipif`-guarded on the firmware repo being
+checked out beside the workspace. On the Jetson it is not, so the test **skips**. The guarantee
+was zero on the only machine that matters.
+
+The exposure is not theoretical. The companion has now removed its host-side `MOVE_STOP` brake
+because rev 2 brakes on-board. Flash a rev-1 board, or swap a spare in at the pool, and `stop`
+and every abort apply **zero braking thrust** to a 20 kg hull, with nothing in any log saying
+so. Silent in exactly the way R44 was loud.
+
+Fixed by putting the number on the wire:
+`AUTOPILOT_VERSION.middleware_sw_version = SROT_FW_BEHAVIOUR_REV` (we have no middleware, so
+the field was zero and free; `MAV_CMD_REQUEST_MESSAGE(148)` already served the message). A
+companion can now read it at connect and refuse to arm. `0` is defined to mean "older than
+2026-08-01" — that build never populated the field — so the correct host behaviour is to fail
+closed on `0` rather than treat it as unknown.
+
+**Verified on hardware** (COM19, after flash): the board answers `middleware_sw_version = 2`.
+
+The lesson is worth stating plainly, because we have now made it twice in one round: *a check
+that cannot run at the moment of risk is not a check.* R44 was a bug the reviews could not see
+without running the board; R45 was a safeguard that could not run where the danger was.
+
 ## Found by review of this round's own work
 
 - The first `movement::cancel()` was written as `abort()`, which would have been inert for the

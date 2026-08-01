@@ -470,8 +470,23 @@ void sendAutopilotVersion() {
                     MAV_PROTOCOL_CAPABILITY_COMMAND_INT |
                     MAV_PROTOCOL_CAPABILITY_MISSION_INT;
     // Real Hengla version. Vendor id = the SROT board, product id = this firmware.
+    //
+    // middleware_sw_version carries SROT_FW_BEHAVIOUR_REV. We have no middleware, so the
+    // field was 0 and free, and this is the ONLY place a companion can learn what this
+    // firmware DOES rather than what version string it calls itself.
+    //
+    // Why it has to be on the wire at all: duburi_ws removed its host-side MOVE_STOP brake
+    // because rev 2 brakes on-board. Old firmware + new host = the hull COASTS on every
+    // stop and abort, silently. Their check for that was a pytest that reads this repo's
+    // headers off disk -- which skips on the Jetson, where the firmware source is not
+    // checked out, i.e. it protects nothing on the vehicle. A number they can read at
+    // connect time does.
+    //
+    // 0 therefore means "firmware older than 2026-08-01", NOT "unknown" -- a companion is
+    // correct to treat 0 as rev 1 and fail closed. Never send 0 from a build that has a
+    // meaningful revision.
     mavlink_msg_autopilot_version_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
-        caps, HENGLA_FW_VERSION_PACKED, 0, 0, 0,
+        caps, HENGLA_FW_VERSION_PACKED, SROT_FW_BEHAVIOUR_REV, 0, 0,
         custom, zeros, zeros, HENGLA_MAV_VENDOR_ID, HENGLA_MAV_PRODUCT_ID, 0, nullptr);
     mav::tx(m);
 }

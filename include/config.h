@@ -590,6 +590,13 @@
 //      sent ONCE. SET_MESSAGE_INTERVAL/GET_MESSAGE_INTERVAL implemented. ESC_TELEMETRY_1_TO_4
 //      and _5_TO_8 emitted alongside ESC_STATUS. DIVE clamped >= 0. TURN/DIVE report real
 //      progress. SURFACE zeroes pilot translation/yaw; MANUAL_CONTROL ages out to neutral.
+//
+// ON THE WIRE: this number is reported in AUTOPILOT_VERSION.middleware_sw_version (we have
+// no middleware, so the field was free). Request it with MAV_CMD_REQUEST_MESSAGE(148). A
+// companion MUST read it at connect and fail closed, because the alternative -- grepping
+// this repo's source from the companion -- both misses behaviour changes and does not work
+// at all on a vehicle that has no copy of this repo. 0 means "older than 2026-08-01",
+// not "unknown".
 #define SROT_FW_BEHAVIOUR_REV   2
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
