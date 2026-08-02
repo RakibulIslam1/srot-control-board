@@ -20,7 +20,25 @@ included** — not just `set_depth` and `surface`.
 measurement agree, the error is ~0, the loop demands ~0 vertical thrust, and nothing about its
 sign, gain or authority has been exercised. A successful dry run is evidence of nothing.
 
-## 🛑 BLOCKER — resolve this BEFORE the vehicle touches water
+## 🛑 BLOCKER — CAUSE FOUND 2026-08-02, and a second blocker with it
+
+> **Read [`BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md`](BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md)
+> before this section.** The companion side put the board on a bench, read it disarmed, and
+> the arming spin-up is explained:
+>
+> **The Bar30 is producing noise** (317..874 mbar on a still bench, water temp 6..30 °C), so
+> depth reads a phantom **+3..+7 m in air**, so `DEPTH_OUT` sits **saturated at -1.00** — and
+> the mixer's throttle column is `-1` on all four verticals and `0` on all four horizontals.
+> That is verticals-at-full / horizontals-idle, exactly as observed.
+>
+> **The board reports the barometer HEALTHY throughout**, because every sample is individually
+> inside the plausibility band. The per-sample band cannot see variance.
+>
+> ⛔ **The water test does not run until the Bar30 is fixed.** The two hand checks below cannot
+> be performed meaningfully on a sensor that is producing noise, and the depth loop cannot
+> close on it.
+
+## 🛑 Original report — for reference
 
 **On arming, props off, with nothing commanded, the four VERTICAL thrusters spun to
 ~3000–3180 RPM** while the horizontals idled correctly at 85–170 RPM. A subsequent small
@@ -99,8 +117,17 @@ Both pass → continue. Either fails → stop and report.
 
 ## Pre-dive checks (read-only, ~5 minutes)
 
+Run this first — it shows the whole board in one screen (two batteries, depth-loop
+internals, per-ESC RPM/temp, mag accuracy, leak, kill, firmware health):
+
+```bash
+ros2 run duburi_manager connect            # snapshot;  --watch for live
+```
+
 | # | Check | Expected |
 |---|---|---|
+| 0 | `connect` → barometer line | **PASS**. A `NOISE` verdict means the Bar30 is unusable — **stop** |
+| 0b | `connect` → depth loop line | **PASS** (settled). `SATURATED` means arming would command full vertical thrust — **stop** |
 | 1 | `bringup_check --srot` reports behaviour rev | **≥ 4** |
 | 2 | `MAG cal PRESENT` in the boot log | present, `\|off\|` non-zero |
 | 3 | `Mag yaw ref: LOCKED - heading is absolute` | present |
@@ -132,12 +159,12 @@ ros2 run duburi_planner duburi set_mode --target_name DEPTH_HOLD
 
 | # | Command | Watch for |
 |---|---|---|
-| 1 | `duburi set_depth --depth -0.3` | descends, settles, **holds** without oscillating |
+| 1 | `duburi set_depth --target -0.3` | descends, settles, **holds** without oscillating |
 | 2 | *(hand-push it 0.2 m off depth)* | returns to the setpoint, does not run away |
 | 3 | `duburi move_forward --duration 2 --gain 40` | moves, **stops on its own**, holds depth throughout |
 | 4 | `duburi stop` | **decelerates** — does not coast (rev ≥ 2 brakes on-board) |
-| 5 | `duburi yaw_left --degrees 90` | turns ~90°, holds depth |
-| 6 | `duburi turn --heading 0` | goes to **absolute** north, not 90° from wherever it started |
+| 5 | `duburi yaw_left --target 90` | turns ~90°, holds depth |
+| 6 | `duburi turn --target 0` | goes to **absolute** north, not 90° from wherever it started |
 | 7 | `duburi surface` | ascends, disarms at the surface |
 
 **Step 6 is new in rev 4** and is the one to watch: absolute `turn` never worked before, because it
