@@ -20,7 +20,34 @@ included** — not just `set_depth` and `surface`.
 measurement agree, the error is ~0, the loop demands ~0 vertical thrust, and nothing about its
 sign, gain or authority has been exercised. A successful dry run is evidence of nothing.
 
-### ✅ Half of this gate is now closed — on the bench, disarmed
+## 🛑 BLOCKER — resolve this BEFORE the vehicle touches water
+
+**On arming, props off, with nothing commanded, the four VERTICAL thrusters spun to
+~3000–3180 RPM** while the horizontals idled correctly at 85–170 RPM. A subsequent small
+`MANUAL_CONTROL` +Z then took all eight to 0 RPM. Both are unexplained. Observed 2026-08-02;
+the vehicle was disarmed immediately and no further armed runs were made.
+
+**This matters MORE because the signs are correct, not less.** The controller sign and the mixer
+sign are both verified below — so the demand path is right, which means *something is producing a
+heave demand nobody asked for*. On a vehicle whose depth loop has never run closed, unexplained
+vertical thrust is exactly the failure this gate exists to catch. In water it would be a vehicle
+that dives or surfaces the moment it arms.
+
+**Diagnose it DISARMED first. Do not characterise it by repeating armed runs.**
+
+| # | Read | Why |
+|---|---|---|
+| 1 | Which mode does it arm into? | If `DEPTH_HOLD`/`AUTO`, `depth::update()` runs and a standing target error drives the verticals exactly like this |
+| 2 | Is the depth target latched to *current* depth on the disarmed→armed edge? | A target left at 0 with non-zero measured depth is a permanent error |
+| 3 | `DEPTH_ERR` / `DEPTH_OUT` while armed | Separates "the controller demanded it" from "something downstream did". These exist for precisely this. |
+| 4 | `MOT_SPIN_ARM` | Probably *not* it — it applies to all eight, and the horizontals idled correctly |
+| 5 | Why all eight went to 0 on a +Z | A failsafe cutting thrusters and telemetry dropping are very different faults |
+
+**Clearing this is item zero for tomorrow.** Everything below assumes it is understood.
+
+---
+
+### ✅ Two of the four links in this gate are now closed — bench, disarmed
 
 The **controller sign** has been verified for the first time (2026-08-02), without arming and
 without spinning anything, using the `DEPTH_CMD` telemetry added for exactly this purpose:
@@ -32,8 +59,24 @@ correlation(depth, DEPTH_CMD) = +0.719                            correct
                    (a deeper measurement raises the demand, i.e. reduces descent)
 ```
 
-**What that proves:** error → demand has the right sense. The inversion that `AUDIT.md` R1 warns
-about is not present in the controller.
+**And the MIXER sign, same method** (`mixer::mix()` is a pure function, so it previews exactly):
+
+```
+demand throttle = +1.0 (ASCEND)
+MIX_VERT  = -1.0    all four verticals commanded negative = push up    correct
+MIX_VSGN  = 4       all four agree, so no mixer-matrix typo            correct
+```
+
+**What that proves:** the chain is
+
+```
+depth error -> heave demand -> MIXER -> motor output -> MOT_n_DIRECTION -> spin
+     CLOSED                    CLOSED                    BLOCKED (see above)
+```
+
+The inversion `AUDIT.md` R1 warns about is **not** in the controller and **not** in the mixer.
+That is the two-negation trap in `THRUSTER_MAP.md` — a `-1` throttle column *plus* "a positive
+motor command pushes DOWN" — read correctly.
 
 **What it does NOT prove, and why the checks below still stand:**
 - that the demand reaches the **thrusters** with the right sign (mixer columns and
