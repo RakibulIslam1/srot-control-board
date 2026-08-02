@@ -6,7 +6,8 @@
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
 #include "comms/params.h"
-#include "control/depth_control.h"  // preview()/lastError() — depth-loop observability   // g_params.leak_en — the LEAK health bit's "enabled" state
+#include "control/depth_control.h"
+#include "control/mixer.h"        // mix() is pure — preview the depth chain disarmed  // preview()/lastError() — depth-loop observability   // g_params.leak_en — the LEAK health bit's "enabled" state
 #include "comms/ui_log.h"
 #include "config.h"
 #include "state_types.h"
@@ -793,6 +794,36 @@ void update(uint32_t now) {
             sendNamed(now, "DEPTH_CMD", depth::preview(s.depth, 0.10f));
             sendNamed(now, "DEPTH_ERR", depth::lastError());
             sendNamed(now, "DEPTH_OUT", depth::lastOutput());
+        }
+        // MIXER SIGN, previewed with NOTHING SPINNING.
+        //
+        // depth::update()'s output goes straight into mixer::mix()'s THROTTLE column
+        // (task_control_loop: `mixer::mix(roll, pitch, yaw, thr, fwd, lat, norm)`), and
+        // mix() is a PURE FUNCTION with no state — so the mixer's contribution to the depth
+        // chain can be read exactly, disarmed, by calling it with a known demand.
+        //
+        // This matters because the chain has four arrows and the original R1 inversion could
+        // live in any of them:
+        //     depth error -> heave demand -> MIXER -> motor output -> MOT_n_DIRECTION -> spin
+        // DEPTH_CMD closed the first. This closes the second. Only the last (a physical
+        // motor direction) then needs power, which keeps the armed bench test as short and
+        // as low-risk as possible.
+        //
+        // Convention, from docs/THRUSTER_MAP.md: positive throttle demand = ASCEND, and the
+        // vertical rows carry a -1 throttle column, so an ascend demand must produce a
+        // NEGATIVE normalized output on all four verticals (a negative motor command pushes
+        // the vehicle up). Two negations that must not be read as one — which is precisely
+        // how the original bug happened.
+        {
+            float probe[NUM_THRUSTERS] = {0};
+            mixer::mix(0, 0, 0, /*throttle=ascend*/ 1.0f, 0, 0, probe);
+            // MIX_VERT: vertical thruster 5 (index 4) for a full ASCEND demand. Expect -1.
+            sendNamed(now, "MIX_VERT", probe[4]);
+            // MIX_VSGN: how many of the four verticals got the correct (negative) sign.
+            // Expect 4. Anything less is a mixer matrix error, not a wiring one.
+            int agree = 0;
+            for (int i = 4; i < NUM_THRUSTERS; ++i) if (probe[i] < 0.0f) agree++;
+            sendNamed(now, "MIX_VSGN", (float)agree);
         }
     }
     // Diagnostics: task stack high-water (words free, min ever) + free heap.
