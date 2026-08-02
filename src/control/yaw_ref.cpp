@@ -16,11 +16,28 @@ namespace yaw_ref {
 static const uint16_t NEED_SAMPLES = 100;
 static const uint32_t MIN_SPAN_MS  = 1000;
 
-// Earth's field is 25-65 uT everywhere on the surface. Outside that window the
-// reading is dominated by something local (hull, magnet, live wire) and the
-// heading derived from it is meaningless.
-static const float FIELD_MIN_UT = 25.0f;
-static const float FIELD_MAX_UT = 65.0f;
+// Earth's field is 25-65 uT in free air. INSIDE A HULL IT IS NOT: an enclosure, the
+// thruster magnets and the electronics all attenuate and distort it, and the measured
+// magnitude can sit well under the free-air figure without the HEADING being unusable --
+// the direction survives attenuation far better than the magnitude does.
+//
+// Measured on this vehicle's board: 14.7 uT raw, 19.1 uT after our calibration. A hard
+// 25 uT floor rejected that outright, so the operator got "field strength implausible"
+// with no number to act on and no way to tell an attenuated-but-fine installation from a
+// genuinely broken one.
+//
+// The band is now a PARAMETER and defaults wide. It is a sanity check against a dead or
+// saturated sensor, not a claim about what a good installation looks like. The checks that
+// actually protect the alignment are the ones after it: the samples must agree to within
+// MAX_SPREAD_RAD, which no amount of attenuation can fake.
+static float fieldMinUt() {
+    const float v = g_params.mag_field_min;
+    return (v > 0.0f) ? v : DEF_MAG_FIELD_MIN;
+}
+static float fieldMaxUt() {
+    const float v = g_params.mag_field_max;
+    return (v > fieldMinUt()) ? v : DEF_MAG_FIELD_MAX;
+}
 
 // Max spread (rad) between the min and max sampled heading for the average to be
 // trusted. ~8 deg: loose enough for a boat rocking on its mooring, tight enough to
@@ -30,6 +47,7 @@ static const float MAX_SPREAD_RAD = 0.14f;
 static State    s_state = State::IDLE;
 static bool     s_changed = false;
 static float    s_offset = 0.0f;
+static float    s_last_field = 0.0f;   // last computed |B|, so a refusal can quote it
 
 static uint16_t s_n = 0;
 static uint32_t s_start_ms = 0;
@@ -73,7 +91,14 @@ const char* stateText() {
         case State::SAMPLING:      return "Mag yaw ref: sampling";
         case State::LOCKED:        return "Mag yaw ref: LOCKED - heading is absolute";
         case State::REFUSED_CAL:   return "Mag yaw ref refused: run a mag calibration first";
-        case State::REFUSED_FIELD: return "Mag yaw ref refused: field strength implausible";
+        case State::REFUSED_FIELD: {
+            // Quote the number. "implausible" with no value told the operator nothing they
+            // could act on -- they could not tell an attenuated hull from a dead sensor.
+            static char buf[50];
+            snprintf(buf, sizeof(buf), "Mag ref refused: |B|=%.0fuT, want %.0f-%.0f",
+                     (double)s_last_field, (double)fieldMinUt(), (double)fieldMaxUt());
+            return buf;
+        }
         case State::REFUSED_NOISE: return "Mag yaw ref refused: unstable - hold still, retry";
         default:                   return "Mag yaw ref: off";
     }
@@ -154,7 +179,8 @@ void update(float mx, float my, float mz, uint8_t mag_accuracy,
     const float cz = (mz - off.z) * ((scl.z != 0.0f) ? scl.z : 1.0f);
 
     const float field = sqrtf(cx * cx + cy * cy + cz * cz);
-    if (!isfinite(field) || field < FIELD_MIN_UT || field > FIELD_MAX_UT) {
+    s_last_field = field;          // reported in the refusal text -- see stateText()
+    if (!isfinite(field) || field < fieldMinUt() || field > fieldMaxUt()) {
         if (s_start_ms == 0) { s_start_ms = millis(); setState(State::SAMPLING); }
         if (millis() - s_start_ms > 20000) setState(State::REFUSED_FIELD);
         return;

@@ -260,6 +260,8 @@ static const Desc SCALARS[] = {
     // One-shot magnetic yaw reference (control/yaw_ref). Default OFF: yaw stays relative
     // and the vehicle behaves exactly as before until you calibrate the mag and opt in.
     { "MAG_YAW_REF",    "MAG_YAW_REF",    &g_params.mag_yaw_ref,    DEF_MAG_YAW_REF },
+    { "MAG_FIELD_MIN",  "MAG_FIELD_MIN",  &g_params.mag_field_min,  DEF_MAG_FIELD_MIN },
+    { "MAG_FIELD_MAX",  "MAG_FIELD_MAX",  &g_params.mag_field_max,  DEF_MAG_FIELD_MAX },
     { "MAG_DECL",       "MAG_DECL",       &g_params.mag_decl,       DEF_MAG_DECL },
     { "MAG_ALIGN",      "MAG_ALIGN",      &g_params.mag_align,      0.0f },
     // Configurable GPIOs (defaults = the wired pinout; reboot to apply).
