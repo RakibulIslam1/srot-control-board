@@ -99,8 +99,11 @@ substitute for the board refusing.
 - **`ESC_STATUS` (291) arrives at ~9.9 Hz and pymavlink still cannot decode it** — it shows as
   `UNKNOWN_291`. We read `ESC_TELEMETRY_1_TO_4`/`_5_TO_8` instead, exactly as designed. No
   action wanted; just confirming the workaround holds on real traffic.
-- **Both `BATTERY_STATUS` instances arrive at 2 Hz** — id 0 (PM1) at ~1.35 V, id 1 (PM2) at
-  ~14.74 V. PM1 is still the unwired GPIO36. This exposed a bug **on our side**, not yours:
+- **Both `BATTERY_STATUS` instances arrive at 2 Hz.** **UPDATE, same evening:** the operator
+  corrected the PM1 pin number in the SROT parameters, and PM1 now reads **13.95 V** (it was
+  1.35 V, which we had both been attributing to the unwired GPIO36 — it was a parameter, not
+  the wiring). PM2 reads 14.62 V. Both packs are now sensible.
+  This exposed a bug **on our side**, not yours:
   pymavlink caches one message per *msgid*, so our reader was alternating between the two
   packs. Fixed by de-multiplexing on `id`. Flagging it because if you ever add a third
   instance, anyone sampling naively will hit the same trap.
@@ -131,6 +134,26 @@ and it is not.
 
 **Absence is rendered `--` everywhere, never `0.0`** — your rev-3/4 suppression contract is
 honoured end to end.
+
+## 5b. Payload — we now read `SERVO{n}_ROLE` and refuse anything that is not a switch
+
+Your handoff said the channel role is firmware's, not ours, and that we should address
+channels 0-15 rather than keep a wiring map. Done, and taken one step further: **we read the
+role off the board and refuse to drive a PWM channel at all.**
+
+Read live from the vehicle: **channels 1-8 = `SERVO` (role 1), 9-16 = `SWITCH` (role 2).**
+
+`payload_fire_map` is now plain numbers (`"1:9, 2:10"`), and `fire()` fails **closed** — an
+unreadable role refuses, because a timed-out param read is not evidence a channel is safe to
+drive. The reasoning is exactly yours: a host-side role map goes stale silently on a re-role,
+and the failure mode is driving the manipulator arm during a payload drop.
+
+Verified on the board with nothing armed and nothing actuated: a `fire()` aimed at PCA 3 was
+refused and no `DO_SET_SERVO` went out; PCA 9 was accepted by the gate.
+
+**Nothing needed from you here** — this is us conforming to the contract you specified. Worth
+knowing only because if you ever change the default role layout, our refusals will follow it
+automatically rather than needing a host-side edit.
 
 ## 6. What we are asking for
 
