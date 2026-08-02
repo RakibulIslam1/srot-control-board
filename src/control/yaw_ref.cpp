@@ -48,6 +48,8 @@ static State    s_state = State::IDLE;
 static bool     s_changed = false;
 static float    s_offset = 0.0f;
 static float    s_last_field = 0.0f;   // last computed |B|, so a refusal can quote it
+static uint8_t  s_last_acc = 0;        // last BNO accuracy, quoted in a refusal
+static bool     s_had_our_cal = false; // was a stored mag cal present? quoted in a refusal
 
 static uint16_t s_n = 0;
 static uint32_t s_start_ms = 0;
@@ -90,7 +92,15 @@ const char* stateText() {
     switch (s_state) {
         case State::SAMPLING:      return "Mag yaw ref: sampling";
         case State::LOCKED:        return "Mag yaw ref: LOCKED - heading is absolute";
-        case State::REFUSED_CAL:   return "Mag yaw ref refused: run a mag calibration first";
+        case State::REFUSED_CAL: {
+            // Quote what was actually found. "run a mag calibration first" told an operator
+            // who HAD calibrated that they had not, with no way to see which of the two
+            // inputs was missing.
+            static char buf[50];
+            snprintf(buf, sizeof(buf), "Mag ref: no stored cal (CAL_MAG all 0), acc=%u",
+                     (unsigned)s_last_acc);
+            return buf;
+        }
         case State::REFUSED_FIELD: {
             // Quote the number. "implausible" with no value told the operator nothing they
             // could act on -- they could not tell an attenuated hull from a dead sensor.
@@ -155,7 +165,24 @@ void update(float mx, float my, float mz, uint8_t mag_accuracy,
         have_our_cal = (o.x != 0.0f || o.y != 0.0f || o.z != 0.0f) &&
                        (sc.x > 0.0f && sc.y > 0.0f && sc.z > 0.0f);
     }
-    const uint8_t need_acc = have_our_cal ? 1 : 2;
+    // WITH our own calibration, the BNO's accuracy flag is IRRELEVANT and is not consulted.
+    //
+    // That flag describes the quality of the sensor's OWN internal hard/soft-iron solution --
+    // the one we are overriding with the offsets and scales just read from NVS. Requiring it
+    // to be good is requiring the sensor to agree with a correction it does not know exists.
+    // On this board it never converges anyway (sh2_setCalConfig is rejected and retries do
+    // not take), so it sits at 0-1 for ever and gated the feature off permanently.
+    //
+    // This is the third time this refusal fired for a reason the operator could not
+    // influence: MAG_YAW_REF defaulted off, then this flag, then a free-air field band.
+    // Requiring accuracy >= 1 still left it failing on any boot where the flag read 0.
+    //
+    // What protects the alignment is unchanged and does not depend on the sensor's opinion
+    // of itself: |B| must be in band, and the sampled headings must agree to within
+    // MAX_SPREAD_RAD over at least MIN_SPAN_MS. A wrong calibration cannot pass those.
+    s_had_our_cal = have_our_cal;
+    s_last_acc = mag_accuracy;
+    const uint8_t need_acc = have_our_cal ? 0 : 2;
     if (mag_accuracy < need_acc) {
         // Give it time to converge before giving up — accuracy climbs as the vehicle is
         // moved around. Only refuse once the window has fully elapsed.

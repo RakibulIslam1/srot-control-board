@@ -4,6 +4,7 @@
 // =============================================================================
 
 #include "tasks.h"
+#include <math.h>
 #include <nvs_flash.h>   // nvs_get_stats — NVS free-entry report at boot
 #include "config.h"
 #include "state_types.h"
@@ -91,6 +92,21 @@ void Task_MAVLink(void* pv) {
                      from_nvs ? "loaded from NVS" : "DEFAULTS (not calibrated)");
         }
         mav_stream::sendStatusText(from_nvs ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING, b);
+
+        // Report the MAG calibration specifically, with its numbers. "is my compass
+        // calibration actually saved" has been the operator's question for several rounds and
+        // there was no way to answer it without a param download -- so a save that worked and
+        // a save that silently did nothing looked identical from the console. The magnitude
+        // of the offset vector is enough to tell "calibrated" from "all zeros" at a glance.
+        float ox = 0, oy = 0, oz = 0, sx = 1;
+        { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(10));
+          if (lk.ok()) { ox = g_state.cal.mag_offset.x; oy = g_state.cal.mag_offset.y;
+                         oz = g_state.cal.mag_offset.z; sx = g_state.cal.mag_scale.x; } }
+        const float omag = sqrtf(ox * ox + oy * oy + oz * oz);
+        char mb[64];
+        if (omag > 1e-6f) snprintf(mb, sizeof(mb), "MAG cal PRESENT |off|=%.1fuT sx=%.2f", omag, sx);
+        else              snprintf(mb, sizeof(mb), "MAG cal MISSING - heading stays relative");
+        mav_stream::sendStatusText(omag > 1e-6f ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING, mb);
     }
     // Same for PM1_VMULT — the migration R21 gave PM2 and forgot to give PM1.
     if (params::pm1VmultMigrated()) {
