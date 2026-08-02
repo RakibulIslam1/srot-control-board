@@ -69,6 +69,47 @@ void Task_SensorRead(void* pv) {
             baro_cnt = 0;
             baro_new = bar30::read(baro, baro_zero);
             baro_div = baro_new ? BARO_DIV : (uint16_t)(TASK_SENSOR_HZ / 2);
+
+            // --- Auto-zero the barometer when it has NEVER been calibrated ---------------
+            //
+            // Without a stored CAL_BARO_Z the fallback above is 1013.25 mbar, i.e. STANDARD
+            // sea level -- which is not where anyone actually is. At ~990 mbar ambient that
+            // is a fixed ~0.24 m of phantom depth on a vehicle sitting in air, and after an
+            // NVS erase (the recommended reflash path) every board starts that way. Depth is
+            // the one signal whose loop has never run closed; handing it a known-wrong
+            // reference to start from is the wrong default.
+            //
+            // Strictly bounded, because a self-zeroing depth sensor is dangerous if it fires
+            // at the wrong moment:
+            //   * only when there is NO stored calibration (a real one always wins),
+            //   * only DISARMED,
+            //   * only once per boot,
+            //   * only on a plausible surface pressure (300-1100 mbar), so a sensor that is
+            //     already underwater or reading garbage cannot latch itself as "the surface".
+            // It is NOT persisted -- an operator's deliberate calibration is still the only
+            // thing that survives a reboot. This just stops "uncalibrated" from meaning
+            // "confidently wrong".
+            static bool s_autozero_done = false;
+            if (baro_new && !s_autozero_done && baro.pressure_mbar > 300.0f
+                         && baro.pressure_mbar < 1100.0f) {
+                bool cal_absent = false, armed_now = true;
+                { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(2));
+                  if (lk.ok()) cal_absent = !(g_state.cal.baro_zero_mbar > 0); }
+                { StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
+                  if (lk.ok()) armed_now = g_state.control.armed; }
+                if (cal_absent && !armed_now) {
+                    s_autozero_done = true;
+                    baro_zero = baro.pressure_mbar;
+                    { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(5));
+                      if (lk.ok()) g_state.cal.baro_zero_mbar = baro.pressure_mbar; }
+                    char b[64];
+                    snprintf(b, sizeof(b), "Depth auto-zeroed at %.1f mbar (not saved)",
+                             baro.pressure_mbar);
+                    mav_stream::queueStatusText(MAV_SEVERITY_WARNING, b);
+                    // Re-read against the new reference so this cycle already publishes ~0.
+                    baro_new = bar30::read(baro, baro_zero);
+                }
+            }
         }
 
         // --- Battery / discrete decimated ---
@@ -138,28 +179,17 @@ void Task_SensorRead(void* pv) {
                                         "IMU calibration saved to sensor flash");
         }
 
-        // --- Stop the mag report once the earth reference is taken --------------------
+        // NOT DISABLING THE MAG REPORT. It was implemented and backed out on the bench.
         //
-        // The mag never feeds attitude (6-DOF GAME_ROTATION_VECTOR), so after yaw_ref has
-        // locked it has no consumer at all. Dropping the report cuts SHTP traffic on an
-        // I2C bus polled without the INT line, where extra reports are the documented
-        // desync/reset risk. MAG_ALIGN re-enables it (yaw_ref::reset() -> not LOCKED).
+        // The idea was sound -- the mag never feeds attitude (6-DOF GAME_ROTATION_VECTOR), so
+        // after yaw_ref locks the report has no consumer, and dropping it would cut SHTP
+        // traffic on a bus polled without the INT line. But the BNO085 and the Bar30 share
+        // I2C0, and issuing an SHTP sensor-config transaction while a Bar30 conversion is in
+        // flight produced garbage pressure (608 -> 744 mbar on a healthy sensor) and a PANIC
+        // reset. The traffic saving was never measured; the corruption was.
         //
-        // Ordered AFTER the DCD save above on purpose: stop the report first and the
-        // accuracy flag stops updating, so the save would never fire.
-        {
-            static bool mag_report_on = true;
-            const bool want_on = (yaw_ref::state() != yaw_ref::State::LOCKED) ||
-                                 !bno085::dcdSavedThisBoot();
-            if (want_on != mag_report_on) {
-                if (bno085::setMagReportEnabled(want_on)) {
-                    mag_report_on = want_on;
-                    mav_stream::queueStatusText(MAV_SEVERITY_INFO,
-                        want_on ? "Mag report ON (re-aligning)"
-                                : "Mag report OFF - heading is now inertial");
-                }
-            }
-        }
+        // If this is revisited it needs an I2C0 mutex shared with bar30, not a bare call from
+        // this loop. bno085::setMagReportEnabled() is left in place, unused, for that work.
 
         // --- Publish under mtx_sensors (short lock, skip cycle if contended) ---
         // The extra braces MATTER: without them the StateLock lives to the end of the
