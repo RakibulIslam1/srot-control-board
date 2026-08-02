@@ -391,6 +391,9 @@ static bool s_pm2_vmult_migrated = false;
 // Same, for PM1_VMULT's volts-per-count -> divider-ratio migration.
 static bool s_pm1_vmult_migrated = false;
 
+// True when init() switched MAG_YAW_REF on for a board that stored the old 0.
+static bool s_mag_yaw_ref_migrated = false;
+
 void init() {
     buildTable();
 
@@ -486,6 +489,19 @@ void init() {
         // which is exactly the untunable-parameter failure R21 existed to remove.
         s_prefs.putUChar(NVS_KEY_PM1_MIGRATED, 1);
     }
+    // One-shot MAG_YAW_REF 0 -> 1. The feature (control/yaw_ref) shipped switched off, so
+    // every board in service stored 0 and heading stayed relative -- "the heading goes to
+    // zero whenever I reset the flight controller". Changing the default alone cannot fix
+    // those boards: the loop above persists every row on a defaults-version boot, so the
+    // stored 0 wins. Same marker discipline as the PM1/PM2 migrations: exactly once.
+    if (s_prefs.getUChar(NVS_KEY_MAGREF_MIGRATED, 0) == 0) {
+        if (!force_defaults && g_params.mag_yaw_ref < 0.5f) {
+            g_params.mag_yaw_ref = DEF_MAG_YAW_REF;
+            s_prefs.putFloat("MAG_YAW_REF", DEF_MAG_YAW_REF);
+            s_mag_yaw_ref_migrated = true;
+        }
+        s_prefs.putUChar(NVS_KEY_MAGREF_MIGRATED, 1);
+    }
     s_prefs.end();
 
     s_defaults_were_forced = force_defaults;   // reported once the MAVLink link is up
@@ -504,6 +520,8 @@ bool nvsWasReformatted() { return s_nvs_was_reformatted; }
 bool pm2VmultMigrated() { return s_pm2_vmult_migrated; }
 
 bool pm1VmultMigrated() { return s_pm1_vmult_migrated; }
+
+bool magYawRefMigrated() { return s_mag_yaw_ref_migrated; }
 
 bool espnowWanted() {
     if (g_params.espnow_en <= -0.5f) return false;   // forced off

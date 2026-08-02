@@ -6,6 +6,7 @@
 #include "drivers/bno085.h"
 #include <Wire.h>
 #include <Adafruit_BNO08x.h>
+#include <sh2.h>          // sh2_setCalConfig / sh2_saveDcdNow — see saveCalibration()
 #include <esp_system.h>
 #include "config.h"
 
@@ -44,6 +45,27 @@ static int s_int_pin = PIN_BNO_INT;
 static uint32_t s_last_event_ms = 0;   // last time getSensorEvent() returned data
 
 static uint32_t s_enable_fail = 0;     // enableReport() rejections (diagnostic)
+
+// --- BNO085 Dynamic Calibration Data (DCD) -----------------------------------
+//
+// THE BUG THIS FIXES: the BNO085 keeps its own hard/soft-iron solution in ITS OWN flash,
+// and it is only written when the host explicitly asks. We never asked. So every power
+// cycle the part restarted with no magnetic calibration and `mag_accuracy` climbed from 0
+// again -- which is exactly the operator's "after some power cycles the magnetometer
+// calibration is lost", and also why the one-shot yaw reference (control/yaw_ref) could
+// refuse: it requires accuracy >= 2 and accuracy was always 0 for the first minutes.
+//
+// Note this is a DIFFERENT thing from our CAL_MAG_* rows in NVS_NS_CAL. Those persist
+// correctly and always did; they are OUR corrections, applied on top of whatever solution
+// the BNO itself has converged to. Saving ours while never saving the sensor's is why the
+// symptom looked like "calibration is there but useless".
+static uint32_t s_dcd_saves = 0;
+static uint32_t s_dcd_last_ms = 0;
+static bool     s_dcd_saved_this_boot = false;
+static bool     s_dcd_pending_announce = false;
+// Never write the part's flash more often than this. Flash has finite endurance and the
+// accuracy flag can oscillate around a threshold; a save loop would wear it out.
+static const uint32_t DCD_MIN_GAP_MS = 60000;
 static uint32_t s_reinit_count = 0;    // full begin_I2C() recoveries
 static uint32_t s_last_heal_ms = 0;    // rate-limit the self-heal attempts
 
@@ -111,8 +133,41 @@ bool begin() {
         }
     }
     enableReports();
+
+    // Ask the part to run dynamic calibration for accel + mag. Without this the DCD never
+    // improves, so there would be nothing worth saving. Failure is non-fatal: the sensor
+    // still works, it just will not self-calibrate, and saveCalibration() will report it.
+    sh2_setCalConfig(SH2_CAL_ACCEL | SH2_CAL_MAG);
+
     s_ok = true;
     return true;
+}
+
+bool saveCalibration(bool force) {
+    if (!s_ok) return false;
+    const uint32_t now = millis();
+    if (!force && s_dcd_last_ms != 0 && (now - s_dcd_last_ms) < DCD_MIN_GAP_MS) return false;
+    // sh2_saveDcdNow() blocks on a command/response round trip; only ever call it from the
+    // sensor task, disarmed, never from the flight loop.
+    const int rc = sh2_saveDcdNow();
+    s_dcd_last_ms = now;
+    if (rc == SH2_OK) {
+        s_dcd_saves++;
+        s_dcd_saved_this_boot = true;
+        s_dcd_pending_announce = true;
+        return true;
+    }
+    return false;
+}
+
+bool dcdSavedThisBoot()   { return s_dcd_saved_this_boot; }
+uint32_t dcdSaveCount()   { return s_dcd_saves; }
+bool takeDcdAnnounce()    { bool a = s_dcd_pending_announce; s_dcd_pending_announce = false; return a; }
+
+bool setMagReportEnabled(bool on) {
+    if (!s_ok) return false;
+    // interval 0 = disable, per the SH-2 sensor-config contract.
+    return s_bno.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED, on ? REPORT_SLOW_US : 0);
 }
 
 bool poll(Sample& out) {

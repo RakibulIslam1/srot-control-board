@@ -19,6 +19,13 @@ namespace calibration {
 static const float GRAV = 9.80665f;
 
 // --- persistence -------------------------------------------------------------
+// Outcome of the last saveToNVS(), surfaced to the GCS. A silent failure here is the
+// difference between "my calibration did not stick" and "my calibration did not stick and
+// nothing told me", which is the state this vehicle was actually in.
+static uint16_t    s_nvs_fail_n = 0;
+static const char* s_nvs_fail_key = nullptr;
+static uint32_t    s_nvs_saves_ok = 0;
+
 void saveToNVS() {
     // Snapshot the cal state under the lock, then do the slow flash writes UNLOCKED
     // so cal-lock consumers aren't stalled for the flash-commit window. Call this
@@ -29,19 +36,61 @@ void saveToNVS() {
         if (!lk.ok()) return;
         c = g_state.cal;
     }
+    // EVERY WRITE IS CHECKED. It was not, and that is how R14 (NVS partition too small)
+    // stayed a mystery across several rounds: Preferences::putFloat() returns 0 on failure
+    // and every return value here was discarded, so a full or unwritable partition looked
+    // exactly like a successful save. A calibration you cannot trust to persist is worse
+    // than one you know is not persisting.
     Preferences p;
-    p.begin(NVS_NS_CAL, false);
-    p.putFloat("gyro_ox", c.gyro_offset.x); p.putFloat("gyro_oy", c.gyro_offset.y); p.putFloat("gyro_oz", c.gyro_offset.z);
-    p.putFloat("acc_ox", c.accel_offset.x); p.putFloat("acc_oy", c.accel_offset.y); p.putFloat("acc_oz", c.accel_offset.z);
-    p.putFloat("acc_sx", c.accel_scale.x);  p.putFloat("acc_sy", c.accel_scale.y);  p.putFloat("acc_sz", c.accel_scale.z);
-    p.putFloat("mag_ox", c.mag_offset.x);   p.putFloat("mag_oy", c.mag_offset.y);   p.putFloat("mag_oz", c.mag_offset.z);
-    p.putFloat("mag_sx", c.mag_scale.x);    p.putFloat("mag_sy", c.mag_scale.y);    p.putFloat("mag_sz", c.mag_scale.z);
-    p.putFloat("baro_z", c.baro_zero_mbar);
-    p.putFloat("lvl_r", c.level_roll_off);  p.putFloat("lvl_p", c.level_pitch_off);
+    if (!p.begin(NVS_NS_CAL, false)) {
+        s_nvs_fail_n++;
+        s_nvs_fail_key = "<open>";
+        return;
+    }
+    uint16_t fails = 0;
+    const char* first_fail = nullptr;
+    auto putF = [&](const char* k, float v) {
+        if (p.putFloat(k, v) == 0) { fails++; if (!first_fail) first_fail = k; }
+    };
+    putF("gyro_ox", c.gyro_offset.x); putF("gyro_oy", c.gyro_offset.y); putF("gyro_oz", c.gyro_offset.z);
+    putF("acc_ox", c.accel_offset.x); putF("acc_oy", c.accel_offset.y); putF("acc_oz", c.accel_offset.z);
+    putF("acc_sx", c.accel_scale.x);  putF("acc_sy", c.accel_scale.y);  putF("acc_sz", c.accel_scale.z);
+    putF("mag_ox", c.mag_offset.x);   putF("mag_oy", c.mag_offset.y);   putF("mag_oz", c.mag_offset.z);
+    putF("mag_sx", c.mag_scale.x);    putF("mag_sy", c.mag_scale.y);    putF("mag_sz", c.mag_scale.z);
+    putF("baro_z", c.baro_zero_mbar);
+    putF("lvl_r", c.level_roll_off);  putF("lvl_p", c.level_pitch_off);
     char key[8];
-    for (int i = 0; i < NUM_THRUSTERS; ++i) { snprintf(key, sizeof(key), "mdir%d", i); p.putChar(key, c.motor_dir[i]); }
+    for (int i = 0; i < NUM_THRUSTERS; ++i) {
+        snprintf(key, sizeof(key), "mdir%d", i);
+        if (p.putChar(key, c.motor_dir[i]) == 0) { fails++; if (!first_fail) first_fail = "mdir"; }
+    }
     p.end();
+
+    // READ BACK. A write that "succeeded" into a partition with no room is the case that
+    // fooled us before, so verify a representative sample actually survived rather than
+    // trusting the return codes alone.
+    if (fails == 0) {
+        Preferences v;
+        if (v.begin(NVS_NS_CAL, true)) {
+            const bool ok =
+                v.getFloat("mag_sx", NAN) == c.mag_scale.x &&
+                v.getFloat("mag_ox", NAN) == c.mag_offset.x &&
+                v.getFloat("lvl_r",  NAN) == c.level_roll_off;
+            v.end();
+            if (!ok) { fails++; first_fail = "<readback>"; }
+        } else {
+            fails++; first_fail = "<verify-open>";
+        }
+    }
+
+    s_nvs_fail_n  = fails;
+    s_nvs_fail_key = first_fail;
+    if (fails == 0) s_nvs_saves_ok++;
 }
+
+uint16_t    nvsFailCount() { return s_nvs_fail_n; }
+const char* nvsFailKey()   { return s_nvs_fail_key; }
+uint32_t    nvsSaveOkCount() { return s_nvs_saves_ok; }
 
 void loadFromNVS() {
     Preferences p;

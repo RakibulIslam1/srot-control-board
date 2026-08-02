@@ -55,4 +55,34 @@ uint32_t resetCount();
 uint32_t enableFailCount();
 uint32_t reinitCount();
 
+// --- BNO085 Dynamic Calibration Data (its OWN flash, not our NVS) -------------
+//
+// The part converges a hard/soft-iron solution at runtime and keeps it in its own flash,
+// but ONLY when the host asks. We never asked, so every power cycle started from zero
+// magnetic accuracy -- the operator's "calibration is lost after a power cycle", and the
+// reason control/yaw_ref could refuse (it needs mag_accuracy >= 2).
+//
+// Distinct from our CAL_MAG_* rows in NVS_NS_CAL, which are OUR corrections and always
+// persisted correctly. Both are needed.
+//
+// Rate-limited internally (>= 60 s between writes) because flash endurance is finite and
+// the accuracy flag can oscillate around a threshold. `force` bypasses the gap for an
+// explicit operator-triggered save. Blocks on a command/response round trip: call only
+// from the sensor task, and never while armed.
+bool saveCalibration(bool force = false);
+
+bool     dcdSavedThisBoot();
+uint32_t dcdSaveCount();
+// True once after each successful save, so the caller emits one STATUSTEXT rather than
+// spamming. A silent save is indistinguishable from the silent non-save this replaces.
+bool     takeDcdAnnounce();
+
+// Enable/disable the magnetometer REPORT (interval 0 = off).
+//
+// The mag is never fused into attitude -- the BNO runs 6-DOF GAME_ROTATION_VECTOR -- so
+// once control/yaw_ref has taken its one-shot earth reference the report has no consumer.
+// Stopping it cuts SHTP traffic on a bus polled WITHOUT the INT line, where the driver's
+// own comment notes every extra report multiplies the desync/reset risk.
+bool setMagReportEnabled(bool on);
+
 }  // namespace bno085
