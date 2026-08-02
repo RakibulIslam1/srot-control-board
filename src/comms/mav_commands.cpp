@@ -779,7 +779,21 @@ void update(uint32_t now) {
                 cal_pending = true;
             }
         }
-        if (cal_pending) calibration::saveToNVS();
+        if (cal_pending) {
+            calibration::saveToNVS();
+            // A save that silently did nothing is the failure mode this vehicle already
+            // lived through once (R14). Say so, loudly, naming the key that failed.
+            if (calibration::nvsFailCount() != 0) {
+                char b[64];
+                snprintf(b, sizeof(b), "CAL SAVE FAILED (%u keys, first '%s') - NVS full?",
+                         (unsigned)calibration::nvsFailCount(),
+                         calibration::nvsFailKey() ? calibration::nvsFailKey() : "?");
+                mav_stream::sendStatusText(MAV_SEVERITY_ERROR, b);
+            } else {
+                mav_stream::sendStatusText(MAV_SEVERITY_INFO,
+                                           "Calibration saved + verified on flash");
+            }
+        }
     }
     // A bulk save that failed must not pass in silence. PREFLIGHT_STORAGE already ACKed
     // ACCEPTED (the request WAS accepted; the write is deferred to here), so this message

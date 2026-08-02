@@ -4,6 +4,7 @@
 // =============================================================================
 
 #include "tasks.h"
+#include <nvs_flash.h>   // nvs_get_stats — NVS free-entry report at boot
 #include "config.h"
 #include "state_types.h"
 #include "comms/mavlink_bridge.h"
@@ -56,6 +57,31 @@ void Task_MAVLink(void* pv) {
     if (params::pm2VmultMigrated()) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
                                    "PM2_VMULT migrated to 1.0 (it is now an ESP-NOW trim)");
+    }
+    // MAG_YAW_REF was switched on for a board that stored the old 0. Announce it, because
+    // it changes what `yaw` MEANS -- absolute compass heading instead of relative-to-boot --
+    // so a heading noted from an earlier run is no longer the same number.
+    if (params::magYawRefMigrated()) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "MAG_YAW_REF on: yaw is now ABSOLUTE, not boot-relative");
+    }
+    // Where did the calibration come from? "Is my cal actually loaded" should not require a
+    // param download to answer -- and after a power-cycle complaint it is the first question.
+    {
+        bool from_nvs = false;
+        { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(10));
+          if (lk.ok()) from_nvs = g_state.cal.loaded_from_nvs; }
+        char b[64];
+        nvs_stats_t st;
+        if (nvs_get_stats(nullptr, &st) == ESP_OK) {
+            snprintf(b, sizeof(b), "CAL %s | NVS %u/%u entries free",
+                     from_nvs ? "loaded from NVS" : "DEFAULTS (not calibrated)",
+                     (unsigned)st.free_entries, (unsigned)st.total_entries);
+        } else {
+            snprintf(b, sizeof(b), "CAL %s | NVS stats unavailable",
+                     from_nvs ? "loaded from NVS" : "DEFAULTS (not calibrated)");
+        }
+        mav_stream::sendStatusText(from_nvs ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING, b);
     }
     // Same for PM1_VMULT — the migration R21 gave PM2 and forgot to give PM1.
     if (params::pm1VmultMigrated()) {

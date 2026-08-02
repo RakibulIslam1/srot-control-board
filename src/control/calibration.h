@@ -20,6 +20,14 @@ namespace calibration {
 // setup() before tasks start.
 void loadFromNVS();
 
+// Outcome of the last saveToNVS(). Every Preferences write is now checked (they return 0
+// on failure and every return was previously discarded) AND a representative subset is
+// read back, because a write that "succeeds" into a full partition is exactly the case
+// that made R14 take several rounds to find. 0 fails = the calibration really is on flash.
+uint16_t    nvsFailCount();
+const char* nvsFailKey();     // first key that failed, or nullptr
+uint32_t    nvsSaveOkCount();
+
 // Persist g_state.cal results to NVS.
 void saveToNVS();
 

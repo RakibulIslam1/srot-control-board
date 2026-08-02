@@ -439,7 +439,12 @@
 // so absolute heading degrades over a long dive. That is the accepted trade for immunity.
 // Default OFF: needs a mag calibration done IN THE HULL with electronics powered first, and
 // the tilt-compensation axis signs verified against a real compass (see docs).
-#define DEF_MAG_YAW_REF         0.0f        // 0 = yaw relative (as before) · 1 = align at boot
+// 1 = take the one-shot magnetic earth reference at boot (control/yaw_ref), so heading is
+// an ABSOLUTE compass angle instead of restarting at 0 wherever the BNO happened to boot.
+// Was 0, which meant the whole feature never ran and absolute MOVE_TURN (p4=1) was silently
+// turning relative to an arbitrary zero. Fails safe: a refused alignment leaves offset 0 and
+// behaves exactly as before, and it is announced either way.
+#define DEF_MAG_YAW_REF         1.0f        // 0 = yaw relative · 1 = align once at boot
 #define DEF_MAG_DECL            0.4f        // deg, E positive (~0.4 E for Bangladesh)
 
 // Pilot command shaping (micro-movements).
@@ -623,7 +628,15 @@
 //      scope the GCS failsafe to a named companion, in addition to "any station is alive".
 //      ESPNOW_EN is tri-state (-1 off / 0 auto / +1 on), so Battery 2 starts populating and
 //      the low-thruster-battery failsafe + mixer voltage linearisation become live.
-#define SROT_FW_BEHAVIOUR_REV   3
+//   4  2026-08-02 (AUDIT.md R51-R54). YAW IS NOW ABSOLUTE BY DEFAULT: MAG_YAW_REF defaults
+//      to 1 and is migrated on for boards storing the old 0, so ATTITUDE.yaw / VFR_HUD.heading
+//      are a magnetic compass heading rather than relative to wherever the BNO booted. A
+//      companion comparing a heading across a vehicle reset will see different numbers than
+//      before -- that is the fix, not a regression. Absolute MOVE_TURN (p4=1) now actually
+//      turns to the heading it is given. The BNO085's own calibration is persisted to sensor
+//      flash, so mag accuracy survives a power cycle instead of restarting at 0; and the mag
+//      REPORT stops once the one-shot reference locks (it never fed attitude).
+#define SROT_FW_BEHAVIOUR_REV   4
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
@@ -633,6 +646,10 @@
 // vehicle was still reporting 0.01 V a round later. Same marker discipline: run once per board,
 // then never touch the operator's value again.
 #define NVS_KEY_PM1_MIGRATED    "p_pm1mig"
+// One-shot migration for MAG_YAW_REF 0 -> 1. Needed because a PARAM_DEFAULTS_VER boot WRITES
+// every row to NVS, so boards already in service hold a stored 0 and would never see the new
+// default. Marker-gated like the others: runs once, then the operator's value is theirs.
+#define NVS_KEY_MAGREF_MIGRATED "p_mgrmig"
 
 // -----------------------------------------------------------------------------
 // SECTION 8b — ESP-NOW LINK (P11, receive-only from the 2nd board)

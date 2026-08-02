@@ -182,6 +182,12 @@ bool pm2VmultMigrated();
 // and PM1 did not, which is why a board in the vehicle was still reporting 0.01 V a round later.
 bool pm1VmultMigrated();
 
+// True if init() turned MAG_YAW_REF on for a board that stored the old default of 0.
+// Announced because it changes what `yaw` MEANS: it becomes an absolute compass heading
+// rather than one relative to wherever the BNO booted, so any heading recorded against the
+// old relative zero is no longer comparable.
+bool magYawRefMigrated();
+
 // Should the WiFi/ESP-NOW link to the 2nd board be running? THE single source of truth —
 // every gate (link start, OLED "OFF" vs "--", the boot warning) must ask this, or they drift
 // apart and the OLED explains a state the radio is not actually in.

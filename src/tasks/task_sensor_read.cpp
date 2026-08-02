@@ -116,6 +116,51 @@ void Task_SensorRead(void* pv) {
         }
         const float yaw_abs_off = yaw_ref::offset();   // 0 unless an alignment locked
 
+        // --- Persist the BNO085's OWN calibration once it is worth persisting ---------
+        //
+        // This is the fix for "the magnetometer calibration is lost after a power cycle".
+        // The part keeps its hard/soft-iron solution in its own flash and only writes it
+        // when asked; nothing ever asked, so every boot restarted at accuracy 0.
+        //
+        // Trigger on accuracy 3 (fully converged) while DISARMED. Disarmed matters twice:
+        // sh2_saveDcdNow() blocks on a round trip, and a solution converged next to eight
+        // thrusters pulling current is not one worth freezing into flash.
+        {
+            static bool armed_cache = false;
+            { StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
+              if (lk.ok()) armed_cache = g_state.control.armed; }
+            if (!armed_cache && imu.mag_accuracy >= 3 && !bno085::dcdSavedThisBoot()) {
+                bno085::saveCalibration();
+            }
+        }
+        if (bno085::takeDcdAnnounce()) {
+            mav_stream::queueStatusText(MAV_SEVERITY_INFO,
+                                        "IMU calibration saved to sensor flash");
+        }
+
+        // --- Stop the mag report once the earth reference is taken --------------------
+        //
+        // The mag never feeds attitude (6-DOF GAME_ROTATION_VECTOR), so after yaw_ref has
+        // locked it has no consumer at all. Dropping the report cuts SHTP traffic on an
+        // I2C bus polled without the INT line, where extra reports are the documented
+        // desync/reset risk. MAG_ALIGN re-enables it (yaw_ref::reset() -> not LOCKED).
+        //
+        // Ordered AFTER the DCD save above on purpose: stop the report first and the
+        // accuracy flag stops updating, so the save would never fire.
+        {
+            static bool mag_report_on = true;
+            const bool want_on = (yaw_ref::state() != yaw_ref::State::LOCKED) ||
+                                 !bno085::dcdSavedThisBoot();
+            if (want_on != mag_report_on) {
+                if (bno085::setMagReportEnabled(want_on)) {
+                    mag_report_on = want_on;
+                    mav_stream::queueStatusText(MAV_SEVERITY_INFO,
+                        want_on ? "Mag report ON (re-aligning)"
+                                : "Mag report OFF - heading is now inertial");
+                }
+            }
+        }
+
         // --- Publish under mtx_sensors (short lock, skip cycle if contended) ---
         // The extra braces MATTER: without them the StateLock lives to the end of the
         // for-body and the mutex is held across vTaskDelayUntil() below — i.e. this task

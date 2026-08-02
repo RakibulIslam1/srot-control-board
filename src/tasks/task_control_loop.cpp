@@ -33,6 +33,9 @@ struct LoopIn {
     float      roll, pitch, yaw, gx, gy, gz, depth;
     bool       depth_ok;     // Bar30 present AND reporting recently — see readInputs()
     bool       imu_ok;       // fused attitude fresh (drives the in-flight health warning)
+    bool       imu_ever_valid; // has the IMU EVER produced a fix? gates the "lost" warning
+                               // so a cold boot (BNO needs seconds) is not reported as a
+                               // failure -- it is not lost until it has first been found.
     float      grav_x, grav_y, grav_z, mx, my, mz, pressure;
     bool       kill;
     bool       leak;
@@ -107,6 +110,7 @@ static void readInputs(LoopIn& in) {
             in.depth_ok = s.baro_valid && (s.baro_stamp_ms != 0) &&
                           (millis() - s.baro_stamp_ms < DEPTH_STALE_MS);
             in.imu_ok   = s.imu_valid;
+            in.imu_ever_valid = s.imu_ever_valid;
             in.grav_x = s.gravity.x; in.grav_y = s.gravity.y; in.grav_z = s.gravity.z;
             in.mx = s.mag.x; in.my = s.mag.y; in.mz = s.mag.z;
             in.pressure = s.pressure_mbar;
@@ -726,13 +730,22 @@ void Task_ControlLoop(void* pv) {
             static bool     s_imu_bad = false;      // debounced state
             static uint32_t s_bad_since = 0;
             uint32_t now_ms = millis();
-            if (!in.imu_ok) {
+            // `imu_ever_valid` gate: at POWERON the BNO needs seconds to produce its first
+            // attitude, so the 300 ms debounce tripped during normal startup and reported a
+            // LOST IMU on every boot -- crying wolf about the one sensor you must be able to
+            // trust a warning from. It is not "lost" until it has first been found.
+            if (!in.imu_ok && in.imu_ever_valid) {
                 if (s_bad_since == 0) s_bad_since = now_ms;
                 // 300 ms swallows the BNO085's 150 ms post-reset recovery entirely.
                 if (!s_imu_bad && now_ms - s_bad_since > 300) {
                     s_imu_bad = true;
+                    // The arm state is REPORTED, not assumed. This string said "STILL ARMED"
+                    // unconditionally, so a disarmed bench board announced itself as armed --
+                    // exactly the claim an operator acts on, and the one it must never get
+                    // wrong. `armed` is right here and was already being read.
                     mav_stream::queueStatusText(MAV_SEVERITY_ERROR,
-                        "IMU lost - holding last attitude, STILL ARMED");
+                        armed ? "IMU lost - holding last attitude, STILL ARMED"
+                              : "IMU lost - holding last attitude (disarmed)");
                 }
             } else {
                 s_bad_since = 0;
