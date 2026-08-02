@@ -82,6 +82,11 @@ bool read(Sample& out, float surface_mbar) {
     }
 
     // read() triggers a conversion + reads pressure/temperature.
+    // Library default OSR (bits=8). A higher OSR was tried on the bench and made the read
+    // FAIL outright -- no SCALED_PRESSURE2 at all -- so it is not the knob it looked like.
+    // The 608 -> 744 mbar excursion that prompted it was the mag-report disable colliding
+    // with a Bar30 conversion on the shared I2C0 bus, not conversion-time margin; that code
+    // is backed out (see task_sensor_read) and pressure is stable at the default again.
     if (s_ms.read() != 0) {
         if (s_fail_n < 255) ++s_fail_n;
         if (s_fail_n >= FAIL_RETRY && now - s_last_retry_ms >= RETRY_GAP_MS) {
