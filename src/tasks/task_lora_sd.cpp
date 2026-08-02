@@ -217,13 +217,55 @@ void Task_LoRa_SD(void* pv) {
             // again, so nothing misbehaves — but the pilot has no way to know the
             // compensation they tuned around has switched itself off. Same edge-triggered
             // pattern as the IMU lost/recovered and Pico link-flap notices.
-            static bool s_thr_link_prev = false;
-            if (fresh != s_thr_link_prev) {
-                s_thr_link_prev = fresh;
+            // HYSTERESIS ON THE ANNOUNCEMENT ONLY -- deliberately not on the state.
+            //
+            // `fresh` is a bare `age < ESPNOW_STALE_MS` test against a 2 s timeout, while the
+            // 2nd board transmits every 100 ms. So it takes 20 consecutive losses to fall,
+            // but a SINGLE straggler raises it again -- and the next miss drops it. On a
+            // marginal link that produces an endless LOST/up pair, which is exactly what the
+            // operator saw. Same defect the LoRa link had, same shape of fix.
+            //
+            // Loss is announced promptly (you want to hear about it). "Up" must be EARNED:
+            // continuously fresh for THR_LINK_UP_MS before it counts. Announcements are rate
+            // limited, and the suppressed-transition count rides on the next message that
+            // does get through -- on a flapping link that number IS the diagnosis.
+            //
+            // The SAFETY state above (`aux_valid` -> pm2_present -> voltage compensation and
+            // the low-thruster-battery failsafe) is deliberately LEFT ALONE. Debouncing it
+            // would extend the life of a stale pack voltage feeding a failsafe, which is the
+            // precise hazard the freshness gate exists to prevent. Cosmetics get hysteresis;
+            // safety keeps its prompt, pessimistic edge.
+            static const uint32_t THR_LINK_UP_MS   = 1000;
+            static const uint32_t THR_ANNOUNCE_GAP = 30000;
+            static bool     s_thr_link_prev  = false;
+            static uint32_t s_thr_fresh_since = 0;
+            static uint32_t s_thr_last_ann   = 0;
+            static uint16_t s_thr_flaps      = 0;
+
+            if (fresh) { if (s_thr_fresh_since == 0) s_thr_fresh_since = now; }
+            else       { s_thr_fresh_since = 0; }
+
+            const bool stable_up = fresh && (now - s_thr_fresh_since >= THR_LINK_UP_MS);
+            const bool want     = s_thr_link_prev ? fresh : stable_up;
+
+            if (want != s_thr_link_prev) {
+                s_thr_link_prev = want;
+                const bool may_announce = (s_thr_last_ann == 0) ||
+                                          (now - s_thr_last_ann >= THR_ANNOUNCE_GAP);
+                if (!may_announce) { s_thr_flaps++; }
+                else {
+                s_thr_last_ann = now;
                 char b[64];
-                if (fresh) snprintf(b, sizeof(b), "Thruster pack link up (%.1f V)", aux_v);
-                else       snprintf(b, sizeof(b), "Thruster pack link LOST - voltage comp off");
-                mav_stream::queueStatusText(fresh ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING, b);
+                if (want) {
+                    if (s_thr_flaps) snprintf(b, sizeof(b), "Thruster pack link up (%.1f V, %u flaps)",
+                                              aux_v, (unsigned)s_thr_flaps);
+                    else             snprintf(b, sizeof(b), "Thruster pack link up (%.1f V)", aux_v);
+                    s_thr_flaps = 0;
+                } else {
+                    snprintf(b, sizeof(b), "Thruster pack link LOST - voltage comp off");
+                }
+                mav_stream::queueStatusText(want ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING, b);
+                }   // may_announce
             }
         }
 
