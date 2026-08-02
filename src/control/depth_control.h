@@ -28,6 +28,18 @@ float target();
 // Depth-PID integrator state (for CoB vertical auto-trim).
 float integral();
 
+// Read the depth loop's SIGN with the vehicle disarmed and nothing spinning. Runs the same
+// PID class over the same error expression against a separate instance (so the flight
+// integrator is never wound up while disarmed). See the long note in the .cpp — the
+// documented "hand-move the vehicle" check only works in water, which is why this loop went
+// so long unverified. Published as DEPTH_CMD.
+float preview(float meas_depth, float tgt);
+
+// Last error / output of the REAL controller, so the water test can confirm the armed loop
+// agrees with what preview() showed on the bench. Published as DEPTH_ERR / DEPTH_OUT.
+float lastError();
+float lastOutput();
+
 // Remove `amount` of accumulated integrator (never past zero, never sign-flipping).
 // The CoB auto-trim calls this after transferring that effort into its own feedforward
 // trim, so the effort is HANDED OVER rather than duplicated.

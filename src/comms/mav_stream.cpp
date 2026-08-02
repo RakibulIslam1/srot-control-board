@@ -5,7 +5,8 @@
 #include "comms/mav_stream.h"
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
-#include "comms/params.h"   // g_params.leak_en — the LEAK health bit's "enabled" state
+#include "comms/params.h"
+#include "control/depth_control.h"  // preview()/lastError() — depth-loop observability   // g_params.leak_en — the LEAK health bit's "enabled" state
 #include "comms/ui_log.h"
 #include "config.h"
 #include "state_types.h"
@@ -766,6 +767,33 @@ void update(uint32_t now) {
         // way to see whether the number the refusal keys on was moving at all. yaw_ref needs
         // >= 2, and the DCD save fires at >= 2.
         sendNamed(now, "MAGACC", (float)s.mag_acc);
+        // DEPTH LOOP OBSERVABILITY (AUDIT R1). This loop has never run closed, and the
+        // documented bench check ("hand-move the vehicle in DEPTH_HOLD") only works in
+        // WATER — in air a metre of height is ~1.2 mm of equivalent depth. So the sign was
+        // untestable on a bench, which is much of why it stayed unverified.
+        //
+        // DEPTH_CMD is the demand a DISARMED vehicle WOULD make for the current depth vs a
+        // target 0.5 m below it. Pressurise the Bar30 by hand and read the sign, with
+        // nothing spinning:
+        //   measured deeper than target  -> POSITIVE -> ascend   (correct)
+        //   measured shallower           -> NEGATIVE -> descend  (correct)
+        // Moving AWAY from the target means the sign is inverted. Do not dive.
+        //
+        // DEPTH_ERR/DEPTH_OUT are the REAL controller's last error and output, so the water
+        // test can confirm the armed loop agrees with what the bench preview showed.
+        if (s.depth_ok) {
+            // FIXED target of 0.10 m depth, not an offset from the measurement.
+            //
+            // An offset target holds the error CONSTANT, so DEPTH_CMD never moves and only
+            // the sign is readable — and at 0.5 m the proportional term also saturates the
+            // clamp, hiding even that. A fixed shallow target keeps the output in its LINEAR
+            // range and makes it TRACK the measurement, so the response is visible too:
+            // s.depth is POSITIVE-DOWN, so at the surface (~0 m) the demand is negative
+            // (descend toward 0.10 m) and rises toward 0 as the vehicle actually gets deeper.
+            sendNamed(now, "DEPTH_CMD", depth::preview(s.depth, 0.10f));
+            sendNamed(now, "DEPTH_ERR", depth::lastError());
+            sendNamed(now, "DEPTH_OUT", depth::lastOutput());
+        }
     }
     // Diagnostics: task stack high-water (words free, min ever) + free heap.
     // A stack value trending toward 0 identifies a task about to overflow/reboot.

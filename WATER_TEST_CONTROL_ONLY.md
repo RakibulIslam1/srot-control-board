@@ -20,6 +20,28 @@ included** — not just `set_depth` and `surface`.
 measurement agree, the error is ~0, the loop demands ~0 vertical thrust, and nothing about its
 sign, gain or authority has been exercised. A successful dry run is evidence of nothing.
 
+### ✅ Half of this gate is now closed — on the bench, disarmed
+
+The **controller sign** has been verified for the first time (2026-08-02), without arming and
+without spinning anything, using the `DEPTH_CMD` telemetry added for exactly this purpose:
+
+```
+target 0.10 m deeper than the surface
+DEPTH_CMD          mean -0.844   (NEGATIVE = descend toward it)   correct
+correlation(depth, DEPTH_CMD) = +0.719                            correct
+                   (a deeper measurement raises the demand, i.e. reduces descent)
+```
+
+**What that proves:** error → demand has the right sense. The inversion that `AUDIT.md` R1 warns
+about is not present in the controller.
+
+**What it does NOT prove, and why the checks below still stand:**
+- that the demand reaches the **thrusters** with the right sign (mixer columns and
+  `MOT_n_DIRECTION` are downstream of this and are a separate opportunity to invert);
+- that the loop is **stable** closed, with real water, real mass and real buoyancy.
+
+So: the sign question is answered, the actuation and stability questions are not.
+
 **Bench, props OFF, before the vehicle is near water:**
 
 1. **Depth-hold sign.** Enter `DEPTH_HOLD`. Raise and lower the vehicle by hand.
@@ -42,6 +64,7 @@ Both pass → continue. Either fails → stop and report.
 | 4 | Heading vs a handheld compass | agree within ~10° |
 | 5 | Depth in air | within ±0.1 m of 0 |
 | 6 | `SCALED_PRESSURE2` + `WTEMP` arriving | both present, temp plausible |
+| 6b | `DEPTH_CMD` at the surface | **negative** (descend toward the 0.10 m preview target) |
 | 7 | `BATTERY_STATUS id=1` (thruster pack) | present, matches a multimeter |
 | 8 | `LEAK` | dry |
 | 9 | `GAIN` | **1.0** — 0.5 means half authority on every manual input |
