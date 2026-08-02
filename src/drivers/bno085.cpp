@@ -63,6 +63,9 @@ static uint32_t s_dcd_saves = 0;
 static uint32_t s_dcd_last_ms = 0;
 static bool     s_dcd_saved_this_boot = false;
 static bool     s_dcd_pending_announce = false;
+static bool     s_dcd_pending_fail = false;
+static bool     s_calcfg_ok = false;
+static bool     s_calcfg_became_ok = false;   // announce the late success once
 // Never write the part's flash more often than this. Flash has finite endurance and the
 // accuracy flag can oscillate around a threshold; a save loop would wear it out.
 static const uint32_t DCD_MIN_GAP_MS = 60000;
@@ -137,7 +140,16 @@ bool begin() {
     // Ask the part to run dynamic calibration for accel + mag. Without this the DCD never
     // improves, so there would be nothing worth saving. Failure is non-fatal: the sensor
     // still works, it just will not self-calibrate, and saveCalibration() will report it.
-    sh2_setCalConfig(SH2_CAL_ACCEL | SH2_CAL_MAG);
+    // Without this the DCD never improves, so there is nothing worth saving and mag
+    // accuracy stays pinned at 0 for ever. Its result is REPORTED, not assumed: a silent
+    // failure here looks exactly like "the calibration will not save".
+    // First attempt. It USUALLY FAILS HERE and that is expected: the part needs ~90 ms
+    // after a reset before it accepts a config command -- the same reason enableReport()
+    // can be rejected right after begin() (see enableReportsChecked). Retried from poll()
+    // until it takes; without it the sensor never runs dynamic calibration, mag accuracy is
+    // pinned near 0 for ever, and every mag calibration the operator performs is discarded
+    // on the next boot. That was the actual cause of "the compass calibration will not save".
+    s_calcfg_ok = (sh2_setCalConfig(SH2_CAL_ACCEL | SH2_CAL_MAG) == SH2_OK);
 
     s_ok = true;
     return true;
@@ -157,8 +169,13 @@ bool saveCalibration(bool force) {
         s_dcd_pending_announce = true;
         return true;
     }
+    s_dcd_pending_fail = true;
     return false;
 }
+
+bool takeDcdFailAnnounce() { bool a = s_dcd_pending_fail; s_dcd_pending_fail = false; return a; }
+bool calConfigOk()         { return s_calcfg_ok; }
+bool takeCalConfigAnnounce() { bool a = s_calcfg_became_ok; s_calcfg_became_ok = false; return a; }
 
 bool dcdSavedThisBoot()   { return s_dcd_saved_this_boot; }
 uint32_t dcdSaveCount()   { return s_dcd_saves; }
@@ -172,6 +189,18 @@ bool setMagReportEnabled(bool on) {
 
 bool poll(Sample& out) {
     if (!s_ok) return false;
+
+    // Retry the calibration-config until the part accepts it. Cheap (a few bytes of SHTP
+    // every 2 s, and only until it succeeds) and it is what makes the mag converge at all.
+    if (!s_calcfg_ok) {
+        static uint32_t s_calcfg_try_ms = 0;
+        const uint32_t now = millis();
+        if (now - s_calcfg_try_ms >= 2000) {
+            s_calcfg_try_ms = now;
+            s_calcfg_ok = (sh2_setCalConfig(SH2_CAL_ACCEL | SH2_CAL_MAG) == SH2_OK);
+            if (s_calcfg_ok) s_calcfg_became_ok = true;
+        }
+    }
 
     if (s_bno.wasReset()) {
         // The part needs ~90 ms after a reset before it accepts sh2_setSensorConfig, so

@@ -76,6 +76,16 @@ uint32_t dcdSaveCount();
 // True once after each successful save, so the caller emits one STATUSTEXT rather than
 // spamming. A silent save is indistinguishable from the silent non-save this replaces.
 bool     takeDcdAnnounce();
+// True once after a save ATTEMPT failed. A silent failure here is indistinguishable from
+// "the calibration will not save", which is exactly how this bug presented.
+bool     takeDcdFailAnnounce();
+// Did sh2_setCalConfig() succeed at begin()? If false the sensor is not running dynamic
+// calibration at all, so mag accuracy will never climb and there is nothing to save.
+bool     calConfigOk();
+// True once when a RETRIED sh2_setCalConfig finally succeeded (it is normally rejected on
+// the first attempt, ~90 ms after reset). Lets the caller say so instead of leaving the
+// boot-time "calibration OFF" error as the operator's last word on the subject.
+bool     takeCalConfigAnnounce();
 
 // Enable/disable the magnetometer REPORT (interval 0 = off).
 //

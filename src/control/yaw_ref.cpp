@@ -72,7 +72,7 @@ const char* stateText() {
     switch (s_state) {
         case State::SAMPLING:      return "Mag yaw ref: sampling";
         case State::LOCKED:        return "Mag yaw ref: LOCKED - heading is absolute";
-        case State::REFUSED_CAL:   return "Mag yaw ref refused: mag not calibrated";
+        case State::REFUSED_CAL:   return "Mag yaw ref refused: run a mag calibration first";
         case State::REFUSED_FIELD: return "Mag yaw ref refused: field strength implausible";
         case State::REFUSED_NOISE: return "Mag yaw ref refused: unstable - hold still, retry";
         default:                   return "Mag yaw ref: off";
@@ -101,9 +101,37 @@ void update(float mx, float my, float mz, uint8_t mag_accuracy,
         if (lk.ok() && g_state.control.armed) return;
     }
 
-    // The BNO085 reports its own mag calibration confidence 0..3. Below 2 the hard-iron
-    // solution has not converged and the heading can be tens of degrees out.
-    if (mag_accuracy < 2) {
+    // Do WE have a stored magnetic calibration? This is the question that actually matters,
+    // and it is not the one this gate used to ask.
+    //
+    // It required the BNO085's own accuracy flag to reach 2. On this board that flag never
+    // gets there: sh2_setCalConfig() is rejected (the part wants ~90 ms after reset) and
+    // retrying it from poll() does not take either, so the sensor never runs its dynamic
+    // calibration and the flag is pinned at 0-1 for ever. The operator calibrated the
+    // compass repeatedly, saw "Calibration saved + verified on flash", rebooted, and got
+    // "mag yaw ref refused: mag not calibrated" every single time -- because the refusal was
+    // keyed on a number their calibration does not affect.
+    //
+    // OUR calibration is the one we apply below (offsets + scales from NVS_NS_CAL), it is
+    // the one the operator actually performs, and it persists correctly. When it is present,
+    // trust it: the BNO's flag becomes a bonus, not a veto. The real guards against a bad
+    // alignment are the two that follow -- field magnitude must be earth-like, and the
+    // samples must agree -- and neither depends on the sensor's own opinion of itself.
+    //
+    // With NO calibration of our own, the old rule stands: demand accuracy >= 2, because
+    // then the BNO's internal solution is the only correction there is.
+    bool have_our_cal = false;
+    {
+        StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(2));
+        if (!lk.ok()) return;
+        const Vec3f& o = g_state.cal.mag_offset;
+        const Vec3f& sc = g_state.cal.mag_scale;
+        // A never-calibrated board reads offsets 0,0,0 and scales 1,1,1 exactly.
+        have_our_cal = (o.x != 0.0f || o.y != 0.0f || o.z != 0.0f) &&
+                       (sc.x > 0.0f && sc.y > 0.0f && sc.z > 0.0f);
+    }
+    const uint8_t need_acc = have_our_cal ? 1 : 2;
+    if (mag_accuracy < need_acc) {
         // Give it time to converge before giving up — accuracy climbs as the vehicle is
         // moved around. Only refuse once the window has fully elapsed.
         if (s_start_ms == 0) { s_start_ms = millis(); setState(State::SAMPLING); }
