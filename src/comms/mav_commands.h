@@ -25,6 +25,15 @@ void update(uint32_t now_ms);
 // True while a GCS heartbeat has been seen within GCS_FAILSAFE_MS.
 bool gcsLinkOk();
 
+// The GCS-loss failsafe, scoped. `gcsLinkOk()` answers "is ANY control station alive"
+// (Bondor over USB, the LoRa bridge). `companionLost()` answers the different and more
+// specific question the companion team asked for: "was the Jetson here, and has it gone?"
+// It is false when no companion is configured AND false when one is configured but has
+// never been heard — so a bench session with no Jetson attached behaves exactly as before.
+bool companionLost();
+bool companionConfigured();
+bool companionSeen();
+
 // Mark GCS activity now (any inbound packet counts as a live link). Used by the
 // LoRa uplink path so the link stays "up" while commands flow, not only heartbeats.
 void feedGcs();

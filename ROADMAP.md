@@ -265,6 +265,11 @@ codebase so far.**
 - **Verify on hardware before any dive:** depth hold with the Bar30 actually fitted — hand-move the
   sensor and confirm it drives the *correct* way — and specifically confirm the SURFACE failsafe
   ascends. Nothing about this loop has ever been exercised closed.
+  **This gates every AUTO move — every `SROT_MOVE` primitive, `move_forward` included** — because
+  `SROT_MOVE` auto-enters `AUTO` and `AUTO` closes the depth loop under every primitive. There is no
+  depth-free path through AUTO, so "it's only a forward move" is not an exemption. And an **in-air**
+  `move_forward` is not partial validation: at ~0 m the target and the measurement agree, so the
+  loop never does any work.
 
 ### 2026-07-30 — Thruster-voltage link brought up; low-battery failsafe debounced (B12)
 

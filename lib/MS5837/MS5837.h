@@ -1,0 +1,180 @@
+#pragma once
+//
+//    FILE: MS5837.h
+//  AUTHOR: Rob Tillaart
+// VERSION: 0.3.3
+//    DATE: 2023-11-12
+// PURPOSE: Arduino library for MS5837 temperature and pressure sensor.
+//     URL: https://github.com/RobTillaart/MS5837
+
+
+#include "Arduino.h"
+#include "Wire.h"
+
+#define MS5837_LIB_VERSION        (F("0.3.3"))
+
+
+//  TYPES
+constexpr uint8_t MS5837_TYPE_UNKNOWN = 255;
+constexpr uint8_t MS5803_TYPE_01      =   1;
+constexpr uint8_t MS5837_TYPE_02      =   2;
+constexpr uint8_t MS5837_TYPE_30      =  30;
+
+
+//  ERROR CODES
+//  I2C twoWire can return 1..5 (AVR)
+constexpr int MS5837_OK             = 0;
+constexpr int MS5837_ERROR_I2C      = -10;
+constexpr int MS5837_ERROR_REQUEST  = -11;
+//  SROT: the calibration PROM failed its own CRC-4. Upstream never checked it, which is how
+//  a garbage coefficient set could present itself as a healthy depth sensor.
+constexpr int MS5837_ERROR_CRC      = -12;
+
+
+class MS5837
+{
+public:
+  MS5837(TwoWire *wire = &Wire);
+
+  //  MS5837_30 bar = 0
+  //  MS5837_02 bar = 1
+  //  MS5803_02 bar = 2
+  bool     begin(uint8_t mathMode);
+  bool     isConnected();
+  bool     reset(uint8_t mathMode);
+  uint8_t  getType();
+  uint8_t  getAddress();
+
+
+  //////////////////////////////////////////////////////////////////////
+  //
+  //  READ
+  //
+  //  call will block 3-40 milliseconds, depends on # bits.
+  //  bits = 8-12 for the MS5803_02
+  //  bits = 8-13 for the MS5837_02 and MS5837_30
+  //  returns 0 on success
+  int      read(uint8_t bits = 8);
+  uint32_t lastRead();
+
+  //  see https://github.com/RobTillaart/temperature for conversions.
+  //  returns Celsius
+  float    getTemperature();
+  //  see https://github.com/RobTillaart/pressure for conversions.
+  //  returns mBar
+  float    getPressure();
+  //       compensate for actual air pressure if needed
+  //       returns meters.
+  //  pressure is in Pascal (SI-unit)
+  float    getPressurePascal();
+
+
+  //  ALTITUDE
+  //  airPressure in mBar,
+  //  returns meters
+  //  be sure to fill in correct air pressure at sea level.
+  float    getAltitude(float airPressure = 1013.25);
+  //  airPressure is in mBar,
+  //  returns feet.
+  float    getAltitudeFeet(float airPressure = 1013.25);
+  //  pressure is in mBar (pressure @ altitude)
+  //  altitude is in meter
+  //  returns mBar (@ sea level)
+  float    getSeaLevelPressure(float pressure, float altitude);
+
+
+  //////////////////////////////////////////////////////////////////////
+  //
+  //  DEPTH
+  //
+  //  density is temperature dependent, see
+  //  https://www.usgs.gov/special-topics/water-science-school/science/water-density
+  //
+  //  density water 20°C = 0.99802
+  //  density seawater is
+  //  density in grams / cm3  (so not in grams per liter
+  void     setDensity(float density = 0.99802);
+  float    getDensity();
+  //
+  //  returns meters (SI unit)
+  //  compensate for actual air pressure if needed
+  float    getDepth(float airPressure = 1013.25);
+  //  idem, returns feet.
+  float    getDepthFeet(float airPressure = 1013.25);
+
+
+  //////////////////////////////////////////////////////////////////////
+  //
+  //  ERROR
+  //
+  int      getLastError();
+
+
+  //////////////////////////////////////////////////////////////////////
+  //
+  //  PROM zero - meta info
+  //
+  uint16_t getCRC();
+  //  SROT additions. promCrcOk() validates the PROM image the datasheet's own CRC-4 covers;
+  //  begin()/reset() now fail when it does not match, so a bad sensor reports itself as
+  //  absent rather than supplying fabricated pressure, depth and temperature.
+  //  promRaw(i) exposes the unscaled word for diagnostics — log it before blaming the CRC.
+  bool     promCrcOk();
+  uint16_t promRaw(uint8_t i);
+  uint16_t getProduct();
+  uint16_t getFactorySettings();
+  uint16_t getPromZero();
+
+protected:
+  uint32_t readADC();
+  int      command(const uint8_t command);
+  void     initConstants(uint8_t mathMode);
+
+  uint8_t  _address = 0x76;
+
+  //  SROT: raw PROM words as read, before the mathMode scaling applied to C[]. The CRC is
+  //  defined over the unscaled image, so it cannot be recomputed from C[].
+  uint16_t _prom[7] = {0};
+
+  float    _temperature = 0.0f;  //  Celsius   (SROT: was uninitialised)
+  float    _pressure    = 0.0f;  //  mBar      (SROT: was uninitialised)
+
+  float     C[8];
+  uint8_t   _type = MS5837_TYPE_UNKNOWN;
+
+  float     _density = 0.99802;  //  water at 20 °C
+  //  prepare error handling.
+  int      _error = MS5837_OK;
+  uint32_t _lastRead;
+
+  TwoWire * _wire = NULL;
+};
+
+
+
+///////////////////////////////////////////////////////////////////
+//
+//  DERIVED CLASSES
+//
+
+////////////////////////////////////////////////////////////////////
+//
+//  MS5803
+//
+class MS5803 : public MS5837
+{
+public:
+  MS5803(TwoWire *wire = &Wire);
+  MS5803(uint32_t address, TwoWire *wire = &Wire);
+};
+
+
+//////////////////////////////////////////////////////////////////////
+//
+//  MS5837_30
+//  MS5837_02
+//
+
+
+//  -- END OF FILE --
+

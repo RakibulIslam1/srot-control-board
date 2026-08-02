@@ -84,7 +84,7 @@ void Task_UI_Status(void* pv) {
                 // PM2_SRC = 2 (ESP-NOW) still needs ESPNOW_EN = 1, or no packet can arrive.
                 {
                     const int src2 = (int)g_params.pm2_src;
-                    v.pm2_src_off = (src2 == 0) || (src2 == 2 && g_params.espnow_en <= 0.5f);
+                    v.pm2_src_off = (src2 == 0) || !params::espnowWanted();
                 }
                 v.imu_ever_valid = g_state.sensors.imu_ever_valid;
                 v.bno_resets = g_state.sensors.bno_reset_count;

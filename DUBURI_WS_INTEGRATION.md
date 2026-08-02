@@ -18,10 +18,23 @@ Four audit rounds (2026-07-30 and 2026-07-31) found 29 real defects, several of 
 companion must assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affect **your** design:
 
 1. **The depth PID's sign was inverted, and the SURFACE failsafe drove the vehicle DOWN.** Fixed —
-   but the loop had **never run closed**, because the Bar30 was not fitted during development. Treat
-   every depth-dependent behaviour (`DIVE`, and the depth hold underlying *every* other primitive) as
-   **unproven** until you bench-verify it. Do not design a mission that depends on depth accuracy
-   before someone has hand-tested that loop. (`AUDIT.md` R1.)
+   but the loop had **never run closed**, because the Bar30 was not fitted during development.
+
+   **The two mandatory bench checks (§8) gate every AUTO move — i.e. every `SROT_MOVE` primitive,
+   `move_forward` included. There is no depth-free path through AUTO.** `SROT_MOVE` auto-enters
+   `AUTO`, and `task_control_loop.cpp` runs `depth::setTarget(...)` + `depth::update(...)` under the
+   `AUTO` case for **every** primitive, not just `DIVE`. A "control-only" mission with no `set_depth`
+   anywhere still runs the loop that has never run closed.
+
+   This paragraph used to say "every depth-dependent behaviour", which read as *"skip the depth
+   checks if you are only driving forward"* — the exact run where a sign error bites first, and in
+   water a vertical runaway mid-leg is indistinguishable from a buoyancy problem. Corrected
+   2026-08-02; the finding is the companion team's.
+
+   **An in-air `move_forward` is NOT partial validation.** At ~0 m the latched target and the
+   measurement agree, so the error is ~0, the loop demands ~0 vertical thrust, and nothing about its
+   sign, gain or authority has been exercised. A successful dry move is evidence of nothing.
+   (`AUDIT.md` R1.)
 2. **A move now always reaches exactly one terminal result** — `ACCEPTED`, `CANCELLED`, `FAILED` or
    `DENIED`. Three separate hang paths were fixed. **If you write the action client to wait only for
    `ACCEPTED`, it will still hang**, because preemption resolves as `CANCELLED` and an unstartable
@@ -347,7 +360,12 @@ vision servoing · payload sequencing · logging.
       failsafe falls back to a fixed open-loop ascent.
 - [ ] **⚠ Depth loop verified BY HAND, on the bench, before it is trusted in water.** Its sign was
       inverted until 2026-07-30 and it has never run closed (no Bar30 was fitted during development),
-      so no observed vehicle behaviour has ever validated it. Two checks, both mandatory:
+      so no observed vehicle behaviour has ever validated it.
+      **This gates every AUTO move — every `SROT_MOVE` primitive, `move_forward` included** — not
+      just `DIVE`/`set_depth`/`surface`. `SROT_MOVE` auto-enters `AUTO` and `AUTO` closes the depth
+      loop under every primitive. **An in-air `move_forward` is not partial validation**: at ~0 m
+      target and measurement agree, so the loop is never exercised.
+      Two checks, both mandatory:
       - Enter `DEPTH_HOLD`, then raise and lower the sensor by hand. The vertical thrusters must push
         **back toward** the latched depth, not away from it.
       - Force the SURFACE failsafe (e.g. trip the leak input with `LEAK_EN = 1`) at a simulated depth
