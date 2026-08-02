@@ -158,9 +158,14 @@ void Task_SensorRead(void* pv) {
                 s.depth_m       = baro.depth_m;
                 s.pressure_mbar = baro.pressure_mbar;
                 s.water_temp_c  = baro.temp_c;
-                s.baro_valid    = bar30::healthy();
                 s.baro_stamp_ms = millis();
             }
+            // OUTSIDE the `if (baro_new)`: health must be able to go FALSE without a
+            // successful read, or the flag can only ever be cleared by the very event that
+            // is failing to happen. `healthy()` is now a live consecutive-failure model, not
+            // the boot-time constant it used to be, so this is the point where a sensor that
+            // has stopped answering actually withdraws depth from the rest of the stack.
+            s.baro_valid = bar30::healthy();
             // Battery source (0=off, 1=local ADC, 2=ESP-NOW aux). There is one
             // local battery-voltage ADC (BATT_VOLT); the 2nd battery is ESP-NOW.
             // aux = THRUSTER battery (2nd board, ESP-NOW). Treat it as absent unless the
@@ -173,8 +178,15 @@ void Task_SensorRead(void* pv) {
             if      (src1 == 1) { s.pm1_voltage = an.volt; s.pm1_present = true; }
             else if (src1 == 2) { s.pm1_voltage = aux;     s.pm1_present = (aux > 0.05f); }
             else                { s.pm1_voltage = 0;       s.pm1_present = false; }
-            if      (src2 == 2) { s.pm2_voltage = aux;     s.pm2_present = (aux > 0.05f); }
-            else                { s.pm2_voltage = 0;       s.pm2_present = false; }  // no 2nd local ADC
+            // src2 == 1 is the DEPRECATED alias for 2, not a second ADC. There is exactly one
+            // voltage divider on this board, so "1" never had an implementation and fell
+            // through to off IN SILENCE — blanking the OLED box, Battery 2, the mixer's
+            // voltage linearisation AND the low-thruster-battery failsafe from one stale
+            // parameter. Found set to 1 on the vehicle's own board (2026-08-02) while ESP-NOW
+            // was up and delivering 15.4 V. Accepting it costs nothing and cannot pick a wrong
+            // source, because ESP-NOW is the only source PM2 can physically have.
+            if      (src2 == 2 || src2 == 1) { s.pm2_voltage = aux; s.pm2_present = (aux > 0.05f); }
+            else                             { s.pm2_voltage = 0;   s.pm2_present = false; }
             s.curr_a      = an.curr;
             s.leak        = an.leak;
             // s.kill_switch is set from the 2nd board over ESP-NOW, not here.

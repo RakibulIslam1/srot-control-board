@@ -641,6 +641,15 @@ void Task_ControlLoop(void* pv) {
             if (g_params.fs_gcs_enable  > 0 && in.armed && !mav_commands::gcsLinkOk()) {
                 fs = true; fs_why = "GCS link lost"; fs_is_bat = false;
             }
+            // ...and separately: the COMPANION went away, even though some other station
+            // (Bondor, the LoRa bridge) is still talking. That case used to hold the failsafe
+            // open indefinitely — a dead Jetson at depth with Bondor connected would
+            // station-keep instead of surfacing. `companionLost()` is false until the
+            // companion has actually been heard once, so a bench session with no Jetson
+            // attached is unaffected and cannot be surfaced by this branch.
+            if (g_params.fs_gcs_enable > 0 && in.armed && mav_commands::companionLost()) {
+                fs = true; fs_why = "companion lost"; fs_is_bat = false;
+            }
             // Edge-trigger latch: this branch re-runs every loop while the fault holds,
             // so announce only when the reason changes, and re-arm once it clears.
             // (Comparing pointers is fine — every fs_why is a string literal.)

@@ -370,6 +370,18 @@
 // Below this, a stored PM2_VMULT cannot be a display trim (it would report ~0 V on any pack)
 // and is certainly the pre-change volts-per-count value. Migrated, not silently ignored.
 #define PM2_VMULT_LEGACY_MAX    0.05f
+// Below this, a stored PM1_VMULT cannot be a divider ratio AT ALL.
+//
+// This is a physical bound, not a heuristic: PM1_VMULT is battery-volts per pin-volt across a
+// resistive divider, and a resistive divider ATTENUATES. The pin can never see more than the
+// pack, so the ratio is >= 1 by construction. Anything below 1 describes hardware that cannot
+// exist, and is either the pre-R16 volts-per-count value (~0.009) or a bad calibration attempt.
+//
+// Found in the field at 0.08 on the vehicle's own board on 2026-08-02 — which is why the bound
+// is the physical one and not "a bit under the legacy value". 0.08 is not the legacy number, it
+// is somebody's calibration attempt in the wrong units, and any threshold tuned to catch 0.009
+// specifically would have sailed straight past it.
+#define PM1_VMULT_LEGACY_MAX    1.0f
 
 // Cascaded angle→rate PID starting gains (per axis; tuned later — see ARCHITECTURE.md §4)
 #define DEF_ANG_RLL_P           4.5f
@@ -597,11 +609,30 @@
 // this repo's source from the companion -- both misses behaviour changes and does not work
 // at all on a vehicle that has no copy of this repo. 0 means "older than 2026-08-01",
 // not "unknown".
-#define SROT_FW_BEHAVIOUR_REV   2
+//   3  2026-08-02 (AUDIT.md R46-R50). Depth/temperature can now be ABSENT rather than wrong:
+//      the Bar30's calibration PROM is validated (CRC-4) and its coefficients are no longer
+//      read in a race, so a bad sensor reports itself absent instead of supplying fabricated
+//      pressure, depth and temperature. Consequences on the wire:
+//        * NAMED_VALUE_FLOAT("WTEMP") is SUPPRESSED when the baro is unhealthy or stale.
+//        * SCALED_PRESSURE2 is SUPPRESSED under the same condition (it has no validity field).
+//        * SCALED_IMU2.temperature sends 0, MAVLink's "not provided" sentinel.
+//        * A board whose PROM fails CRC now REFUSES DEPTH_HOLD / AUTO / PATTERN.
+//      Also: SYS_STATUS carries the EXTENDED health bitfield, with LEAK on
+//      MAV_SYS_STATUS_SENSOR_LEAK (health bit clear = leak). NAMED_VALUE_FLOAT("LEAK") is
+//      DEPRECATED but still sent this release. FS_GCS_SYSID/FS_GCS_COMPID (default 255/191)
+//      scope the GCS failsafe to a named companion, in addition to "any station is alive".
+//      ESPNOW_EN is tri-state (-1 off / 0 auto / +1 on), so Battery 2 starts populating and
+//      the low-thruster-battery failsafe + mixer voltage linearisation become live.
+#define SROT_FW_BEHAVIOUR_REV   3
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
 #define NVS_KEY_PM2_MIGRATED    "p_pm2mig"
+// Same one-shot mechanism for PM1_VMULT's units change (volts-per-count -> divider ratio, R16).
+// PM2 got this migration in R21 and PM1 did not, which is the entire reason a board in the
+// vehicle was still reporting 0.01 V a round later. Same marker discipline: run once per board,
+// then never touch the operator's value again.
+#define NVS_KEY_PM1_MIGRATED    "p_pm1mig"
 
 // -----------------------------------------------------------------------------
 // SECTION 8b — ESP-NOW LINK (P11, receive-only from the 2nd board)

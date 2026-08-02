@@ -84,28 +84,64 @@ void Task_LoRa_SD(void* pv) {
                     // can show "no data" instead of a value frozen at whatever arrived last.
                     t.aux_mv   = x.pm2_present ? (uint16_t)(x.pm2_voltage * 1000.0f) : 0;
                     t.curr_ca  = (int16_t)(x.curr_a * 100.0f);
-                    t.wtemp_c  = (int8_t)x.water_temp_c;
+                    // INT8_MIN (-128) = "no data". The bare cast wrapped a corrupt -160 C to
+                    // +96 C -- it manufactured a plausible-looking number out of a fault,
+                    // which is the worst possible way to fail. The wire layout is unchanged,
+                    // so an un-reflashed ground station shows -128: degraded, not wrong.
+                    {
+                        const bool fresh = x.baro_valid && (x.baro_stamp_ms != 0) &&
+                                           (millis() - x.baro_stamp_ms < DEPTH_STALE_MS);
+                        const float wt = x.water_temp_c;
+                        t.wtemp_c = (fresh && wt > -127.0f && wt < 127.0f)
+                                        ? (int8_t)wt : (int8_t)INT8_MIN;
+                    }
                     if (x.leak)        t.flags |= LT_FLAG_LEAK;
                     if (x.kill_switch) t.flags |= LT_FLAG_KILL;
                 }
             }
+            // LAST-GOOD CACHE for the two locks whose fields the ground station displays as
+            // vehicle STATE. `LoraTelem t = {}` plus `if (lk.ok())` with no `else` meant a
+            // contended lock shipped a frame asserting mode = 0 (STABILIZE) and DISARMED --
+            // with a VALID CRC, so nothing downstream could reject it, and the ground
+            // station's modeIsKnown() guard cannot help because 0 is a legal mode. That is a
+            // one-frame lie about the arm state of a 20 kg vehicle.
+            //
+            // Same shape as the s_rpm_last block in mav_stream::snapshot(), which exists for
+            // exactly this class of bug. Timeouts raised 2 -> 5 ms here as well; mtx_sensors
+            // stays at 2 ms because task_sensor_read documents its duty-cycle sensitivity.
+            static uint8_t s_mode_last = 0;
+            static uint8_t s_flags_last = 0;          // ARMED bit only
+            static int16_t s_rpm_last[8] = {0};
+            static uint8_t s_thrflag_last = 0;
+            static bool    s_have_control = false;
             {
-                StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
+                StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(5));
                 if (lk.ok()) {
-                    t.mode = (uint8_t)g_state.control.mode;
-                    if (g_state.control.armed) t.flags |= LT_FLAG_ARMED;
+                    s_mode_last  = (uint8_t)g_state.control.mode;
+                    s_flags_last = g_state.control.armed ? LT_FLAG_ARMED : 0;
+                    s_have_control = true;
                 }
             }
+            // If the control lock has NEVER been taken since boot there is no honest value to
+            // send. Guard the SEND only -- NOT with `continue`, which would also skip the SD
+            // log, the ESP-NOW poll, the TDM receive window and the config-plane relay below.
+            // At ~8 Hz one skipped frame costs nothing; inventing "STABILIZE, disarmed" costs
+            // the operator's trust in the arm indicator.
+            t.mode   = s_mode_last;
+            t.flags |= s_flags_last;
             {
-                StateLock lk(g_state.mtx_thrusters, pdMS_TO_TICKS(2));
+                StateLock lk(g_state.mtx_thrusters, pdMS_TO_TICKS(5));
                 if (lk.ok()) {
-                    for (int i = 0; i < 8 && i < NUM_THRUSTERS; ++i) t.rpm[i] = g_state.thrusters.rpm[i];
-                    if (g_state.thrusters.link_ok) t.flags |= LT_FLAG_THR_LINK;
+                    for (int i = 0; i < 8 && i < NUM_THRUSTERS; ++i)
+                        s_rpm_last[i] = g_state.thrusters.rpm[i];
+                    s_thrflag_last = g_state.thrusters.link_ok ? LT_FLAG_THR_LINK : 0;
                 }
             }
+            for (int i = 0; i < 8 && i < NUM_THRUSTERS; ++i) t.rpm[i] = s_rpm_last[i];
+            t.flags |= s_thrflag_last;
             t.ul_rx = s_ul_rx;
             t.crc = lora_telem_crc(&t);
-            lora_mission::sendTelemetry(t);
+            if (s_have_control) lora_mission::sendTelemetry(t);
 
             // TDM receive window: right after beaconing, listen hard (~70 ms) for the
             // ground station's uplink reply. parsePacket() drives one-shot RX, so poll
@@ -137,7 +173,7 @@ void Task_LoRa_SD(void* pv) {
         // that could not initialise produced exactly the same symptom as one with nothing
         // transmitting to it: a permanent "--". Back off to 2 s and say so on the first
         // failure and every ~30 s after, so the OLED "--" always has an explanation.
-        if (!espnow_started && g_params.espnow_en > 0.5f && (now - espnow_try_ms >= 2000)) {
+        if (!espnow_started && params::espnowWanted() && (now - espnow_try_ms >= 2000)) {
             espnow_try_ms = now;
             espnow_started = espnow_link::begin();
             if (espnow_started) {

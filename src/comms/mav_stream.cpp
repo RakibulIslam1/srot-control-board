@@ -5,6 +5,7 @@
 #include "comms/mav_stream.h"
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
+#include "comms/params.h"   // g_params.leak_en — the LEAK health bit's "enabled" state
 #include "comms/ui_log.h"
 #include "config.h"
 #include "state_types.h"
@@ -229,7 +230,11 @@ static void sendScaledImu(const Snap& s, uint32_t t) {
         xa, ya, za,
         (int16_t)(s.gx * 1000.0f), (int16_t)(s.gy * 1000.0f), (int16_t)(s.gz * 1000.0f),
         (int16_t)(s.mx * 10.0f), (int16_t)(s.my * 10.0f), (int16_t)(s.mz * 10.0f),
-        (int16_t)(s.wtemp * 100.0f));
+        // Temperature comes from the Bar30, not the IMU. 0 is the MAVLink-defined
+        // "temperature not provided" sentinel for this field, so suppressing it when the
+        // baro is unhealthy is spec-correct rather than a local convention. Sending the
+        // number anyway is what let a -160 C reading look like a measurement.
+        s.depth_ok ? (int16_t)(s.wtemp * 100.0f) : (int16_t)0);
     mav::tx(m);
 }
 
@@ -288,9 +293,28 @@ static void sendSysStatus(const Snap& s) {
     }
     // Only report a battery voltage when PM1 is actually present.
     uint16_t vbat = s.pm1_present ? (uint16_t)(s.pm1 * 1000.0f) : UINT16_MAX;
+    // LEAK on the EXTENDED sensor-health bitfield. It was carried only as a
+    // NAMED_VALUE_FLOAT, multiplexed with MV_STATE/WTEMP/GAIN -- and pymavlink caches exactly
+    // one message per msgid, so whichever arrived last won and leak DETECTION on the companion
+    // was probabilistic. A flooding hull is not something to report by lottery. Here it is a
+    // dedicated bit that a temperature reading cannot overwrite.
+    //
+    // Health-bit semantics are inverted by MAVLink convention: bit SET = healthy = DRY.
+    // The vehicle-side failsafe (task_control_loop) and the pre-arm (arming.cpp) are
+    // untouched and remain the actual safety mechanism -- this is a REPORTING fix.
+    const uint32_t ext_present = MAV_SYS_STATUS_SENSOR_LEAK;
+    const uint32_t ext_enabled = (g_params.leak_en > 0.5f) ? MAV_SYS_STATUS_SENSOR_LEAK : 0u;
+    const uint32_t ext_health  = s.leak ? 0u : MAV_SYS_STATUS_SENSOR_LEAK;
+    // EXTENSION_USED belongs in `present` only -- it announces that the *_extended words are
+    // meaningful, and is not itself a sensor that can be enabled or healthy.
+    // Arg order after msg: present, enabled, health, load, voltage, current,
+    // battery_remaining, drop_rate, errors_comm, errors_count1..4, then the THREE extended
+    // words. The trailing zeros here WERE those extended words -- they are replaced, not
+    // appended to.
     mavlink_msg_sys_status_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &m,
-        sensors, sensors, health, 0,
-        vbat, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        sensors | (uint32_t)MAV_SYS_STATUS_EXTENSION_USED, sensors, health, 0,
+        vbat, -1, -1, 0, 0, 0, 0, 0, 0,
+        ext_present, ext_enabled, ext_health);
     mav::tx(m);
 }
 
@@ -706,7 +730,10 @@ void update(uint32_t now) {
     if (iv_sys && now - t_sys >= iv_sys) { t_sys = now; sendSysStatus(s); }
     if (iv_att && now - t_att >= iv_att) { t_att = now; sendAttitude(s, now); }
     if (iv_imu && now - t_imu >= iv_imu) { t_imu = now; sendScaledImu(s, now); }
-    if (iv_prs && now - t_prs >= iv_prs) { t_prs = now; sendScaledPressure(s, now); }
+    // SCALED_PRESSURE2 is SUPPRESSED, not zeroed, when the baro is unhealthy or stale: the
+    // message has no validity field, and press_abs is the same corrupted quantity as depth.
+    // Sending it would be asserting a pressure we know is unreliable. Absence is the signal.
+    if (iv_prs && now - t_prs >= iv_prs && s.depth_ok) { t_prs = now; sendScaledPressure(s, now); }
     if (iv_hud && now - t_hud >= iv_hud) { t_hud = now; sendVfrHud(s); }
     if (iv_bat && now - t_bat >= iv_bat) {
         t_bat = now;
@@ -717,8 +744,14 @@ void update(uint32_t now) {
     if (iv_esc && now - t_esc >= iv_esc) { t_esc = now; sendEscStatus(s, now); }  // per-thruster RPM
     if (iv_nvf && now - t_nvf >= iv_nvf) {
         t_nvf = now;
+        // LEAK also rides SYS_STATUS's extended health bits now (see sendSysStatus). Kept here
+        // for ONE release as a deprecated duplicate so the companion has a migration window --
+        // pymavlink caches one message per msgid, so LEAK sharing NAMED_VALUE_FLOAT with
+        // MV_STATE/WTEMP/GAIN made leak REPORTING probabilistic. Their finding, and a good one.
         sendNamed(now, "LEAK", s.leak ? 1.0f : 0.0f);
-        sendNamed(now, "WTEMP", s.wtemp);
+        // Suppressed when the baro is unhealthy or stale. A consumer caching NAMED_VALUE_FLOAT
+        // simply ages it out; a fabricated -160 it cannot distinguish from a measurement.
+        if (s.depth_ok) sendNamed(now, "WTEMP", s.wtemp);
         sendNamed(now, "STUNT_PRG", s.stunt_prog);
         sendNamed(now, "ATUNE", s.atune ? 1.0f : 0.0f);
         sendNamed(now, "KILL", s.kill ? 1.0f : 0.0f);

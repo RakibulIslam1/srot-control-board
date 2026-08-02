@@ -57,13 +57,27 @@ void Task_MAVLink(void* pv) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
                                    "PM2_VMULT migrated to 1.0 (it is now an ESP-NOW trim)");
     }
-    // The thruster-pack voltage exists ONLY over ESP-NOW. With ESPNOW_EN = 0 the OLED shows
+    // Same for PM1_VMULT — the migration R21 gave PM2 and forgot to give PM1.
+    if (params::pm1VmultMigrated()) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "PM1_VMULT migrated to 11.28 (divider ratio)");
+    }
+    // The thruster-pack voltage exists ONLY over ESP-NOW. With the link off the OLED shows
     // OFF, Battery 2 stays empty, and both the mixer's voltage linearisation and the
     // low-thruster-battery failsafe are inert — all of which look like faults if you do not
     // know the link was never switched on. Say so once at boot instead.
-    if (g_params.espnow_en <= 0.5f && (int)g_params.pm2_src == 2) {
+    if (!params::espnowWanted() && (int)g_params.pm2_src != 0) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
-                                   "ESPNOW_EN=0 - no thruster voltage (set it to 1)");
+                                   "ESPNOW_EN=-1 - no thruster voltage (set it to 0)");
+    }
+    // PM2_SRC = 1 meant "local ADC" in the header comment and NOTHING in the code: there is no
+    // second voltage divider on this board, so the branch never existed and the value fell
+    // through to "off" in silence. A board in the vehicle was found set to 1 on 2026-08-02 —
+    // ESP-NOW was up and delivering 15.4 V the whole time and every consumer read zero.
+    // It is now treated as ESP-NOW (the only source PM2 can physically have), and said out loud.
+    if ((int)g_params.pm2_src == 1) {
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "PM2_SRC=1 has no 2nd ADC - using ESP-NOW; set it to 2");
     }
 
     for (;;) {

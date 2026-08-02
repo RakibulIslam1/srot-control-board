@@ -142,6 +142,11 @@ static const Desc SCALARS[] = {
     { "PM1_VMULT",      "PM1_VMULT",      &g_params.pm1_vmult,      DEF_PM1_VMULT },
     { "PM2_VMULT",      "PM2_VMULT",      &g_params.pm2_vmult,      DEF_PM2_VMULT },
     { "LEAK_EN",        "LEAK_EN",        &g_params.leak_en,        0.0f },
+    // Which source's liveness the GCS failsafe tracks, on top of "any station is alive".
+    // 255/191 = MAV_COMP_ID_ONBOARD_COMPUTER, the Jetson (duburi_ws shipped 191 in 41318e7).
+    // Either field 0 = wildcard = the pre-2026-08-02 "any non-self heartbeat" behaviour.
+    { "FS_GCS_SYSID",   "FS_GCS_SYSID",   &g_params.fs_gcs_sysid,   255.0f },
+    { "FS_GCS_COMPID",  "FS_GCS_COMPID",  &g_params.fs_gcs_compid,  191.0f },
     // Attitude gains use the ArduSub-standard ATC_* names so QGC's Tuning page tunes
     // the REAL SROT controller (backing g_params fields unchanged).
     { "ATC_ANG_RLL_P",  "ATC_ANG_RLL_P",  &g_params.ang_rll_p,      DEF_ANG_RLL_P },
@@ -383,6 +388,9 @@ static bool s_nvs_was_reformatted = false;
 // True when init() rewrote a legacy PM2_VMULT to the new trim units — reported to the GCS.
 static bool s_pm2_vmult_migrated = false;
 
+// Same, for PM1_VMULT's volts-per-count -> divider-ratio migration.
+static bool s_pm1_vmult_migrated = false;
+
 void init() {
     buildTable();
 
@@ -453,6 +461,31 @@ void init() {
         }
         s_prefs.putUChar(NVS_KEY_PM2_MIGRATED, 1);
     }
+
+    // The SAME one-shot for PM1_VMULT, which R21 gave PM2 and forgot to give PM1.
+    //
+    // R16 changed PM1_VMULT's units (volts-per-ADC-count -> divider ratio) and added a runtime
+    // substitution to protect boards holding the old value. R21 removed that substitution --
+    // correctly, because it made the parameter impossible to calibrate -- but shipped no
+    // migration to replace it. So a stored legacy value went straight through and the board in
+    // the vehicle reported 0.01 V for two rounds while the firmware printed a warning nobody
+    // was watching. A warning is not a fix.
+    //
+    // Threshold is the PHYSICAL bound (< 1.0), not the legacy value: see PM1_VMULT_LEGACY_MAX.
+    // The board was found at 0.08, not at 0.009 -- a threshold aimed at the legacy number would
+    // have missed the actual defect.
+    if (s_prefs.getUChar(NVS_KEY_PM1_MIGRATED, 0) == 0) {
+        if (!force_defaults && g_params.pm1_vmult < PM1_VMULT_LEGACY_MAX) {
+            g_params.pm1_vmult = DEF_PM1_VMULT;
+            s_prefs.putFloat("PM1_VMULT", DEF_PM1_VMULT);
+            s_pm1_vmult_migrated = true;
+        }
+        // Written UNCONDITIONALLY, including on the force_defaults path. A marker written only
+        // inside the `if` would leave the migration armed for ever, so a small value the
+        // operator deliberately set later would be overwritten in NVS on a subsequent boot --
+        // which is exactly the untunable-parameter failure R21 existed to remove.
+        s_prefs.putUChar(NVS_KEY_PM1_MIGRATED, 1);
+    }
     s_prefs.end();
 
     s_defaults_were_forced = force_defaults;   // reported once the MAVLink link is up
@@ -469,6 +502,18 @@ bool defaultsWereReset() { return s_defaults_were_forced; }
 bool nvsWasReformatted() { return s_nvs_was_reformatted; }
 
 bool pm2VmultMigrated() { return s_pm2_vmult_migrated; }
+
+bool pm1VmultMigrated() { return s_pm1_vmult_migrated; }
+
+bool espnowWanted() {
+    if (g_params.espnow_en <= -0.5f) return false;   // forced off
+    if (g_params.espnow_en >=  0.5f) return true;    // forced on
+    // AUTO: the link is worth its WiFi cost exactly when something consumes the aux voltage.
+    // PM2_SRC == 1 counts: it is the deprecated alias for ESP-NOW (there is no second ADC),
+    // and a board set to 1 must still bring the radio up or the alias fixes nothing.
+    const int s1 = (int)g_params.pm1_src, s2 = (int)g_params.pm2_src;
+    return (s1 == 2) || (s2 == 2) || (s2 == 1);
+}
 
 void resetAllToDefaults() {
     s_prefs.begin(NVS_NS_PARAMS, false);

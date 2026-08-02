@@ -30,8 +30,13 @@ struct Params {
     // Indicators
     float rgb_brightness;
     // Battery source + ADC calibration
-    float pm1_src;   // PM1_SRC: 0 = off, 1 = local ADC (GPIO35), 2 = ESP-NOW aux
-    float pm2_src;   // PM2_SRC: 0 = off, 1 = local ADC (GPIO36), 2 = ESP-NOW aux
+    float pm1_src;   // PM1_SRC: 0 = off, 1 = local ADC (GPIO36), 2 = ESP-NOW aux
+    // PM2_SRC: 0 = off, 1 = DEPRECATED (no 2nd voltage ADC exists — treated as 2), 2 = ESP-NOW.
+    // There is exactly ONE battery-voltage divider on this board (PIN_BATT_VOLT); PIN_BATT_CURR
+    // is a current shunt, not a second voltage input. "1" was documented and never implemented,
+    // so it fell through to off IN SILENCE and blanked the OLED, Battery 2, the mixer's voltage
+    // linearisation and the low-thruster-battery failsafe all at once.
+    float pm2_src;
     float pm1_vmult;
     float pm2_vmult;
     float leak_en;
@@ -59,6 +64,12 @@ struct Params {
     float js_gain_default;  // JS_GAIN_DEFAULT (0..1 pilot gain)
     float lights_step;      // LIGHTS_STEP (fraction per brighter/dimmer press)
     float fs_gcs_enable;    // FS_GCS_ENABLE (GCS-loss failsafe on/off)
+    // FS_GCS_SYSID / FS_GCS_COMPID — the COMPANION whose liveness is tracked in addition to
+    // "any station is alive". Defaults 255/191 (MAV_COMP_ID_ONBOARD_COMPUTER = the Jetson).
+    // Either field 0 = wildcard = the old any-non-self behaviour. Safe on a bench with no
+    // Jetson: the failsafe only reacts to a companion that has actually been seen once.
+    float fs_gcs_sysid;
+    float fs_gcs_compid;
     float fs_bat_enable;    // FS_BAT_ENABLE
     // FS_BAT_VOLTAGE (V). THRUSTER-pack threshold, not PM1 — the electronics pack is a
     // different battery and this used to be compared against it, which meant the failsafe
@@ -69,7 +80,14 @@ struct Params {
     float pilot_expo;       // PILOT_EXPO (0..1 stick expo for fine centre resolution)
     float arming_check;     // ARMING_CHECK (0 = skip pre-arm checks, 1 = enforce)
     float atune;            // ATUNE (set 1 to start relay auto-tune; auto-resets)
-    float espnow_en;        // ESPNOW_EN (0/1) — start the WiFi/ESP-NOW 2nd-board link
+    // ESPNOW_EN — tri-state, because "0 = off" plus "PM2_SRC defaults to ESP-NOW" shipped a
+    // board that could never report its thruster pack:
+    //   -1 = force OFF (never start WiFi, whatever the sources ask for)
+    //    0 = AUTO      — start iff some PMx_SRC actually wants the ESP-NOW aux voltage
+    //   +1 = force ON
+    // Existing boards hold 0, which now means auto, so the link comes up from the flash alone —
+    // no NVS write, and no PARAM_DEFAULTS_VER bump (which would wipe CAL_*).
+    float espnow_en;
     // Autotune safety monitor — a tune that violates any of these auto-disarms.
     float st_angle_max;     // ST_ANGLE_MAX (deg)  tumbling guard
     float st_rate_max;      // ST_RATE_MAX (deg/s) spin-out guard
@@ -158,6 +176,16 @@ bool nvsWasReformatted();
 // shown in the param list is the value in force. Reported to the GCS because it changes a
 // number the operator may have set by hand.
 bool pm2VmultMigrated();
+
+// True if init() rewrote a stored PM1_VMULT from the old volts-per-ADC-count units to the new
+// divider ratio (~11.28). Same one-shot marker discipline as PM2. PM2 got this migration in R21
+// and PM1 did not, which is why a board in the vehicle was still reporting 0.01 V a round later.
+bool pm1VmultMigrated();
+
+// Should the WiFi/ESP-NOW link to the 2nd board be running? THE single source of truth —
+// every gate (link start, OLED "OFF" vs "--", the boot warning) must ask this, or they drift
+// apart and the OLED explains a state the radio is not actually in.
+bool espnowWanted();
 
 // Restore every parameter to its config.h default and persist. Exposed via
 // MAV_CMD_PREFLIGHT_STORAGE param1 = 2 (ArduPilot's "reset to defaults" convention).

@@ -50,11 +50,52 @@ static uint32_t s_param_stream_start_ms = 0;
 static const uint32_t PARAM_STREAM_MAX_MS = 30000;
 
 // --- GCS link failsafe -------------------------------------------------------
+//
+// TWO independent liveness timers, deliberately not one.
+//
+//   s_gcs_*        — ANY non-self heartbeat. Unchanged behaviour, and it is what keeps the
+//                    vehicle alive on the bench: Bondor is 255/190 over USB, and the LoRa
+//                    ground station synthesises 255/190 too.
+//   s_companion_*  — heartbeats matching FS_GCS_SYSID / FS_GCS_COMPID (the Jetson, 255/191).
+//
+// The failure this closes, raised by the companion team: a DEAD JETSON with Bondor still
+// connected currently holds the GCS failsafe open, so the vehicle station-keeps at depth
+// when it should surface. Tracking only "any heartbeat" cannot see that.
+//
+// But scoping the ONE timer to the companion would break every bench session that has no
+// Jetson attached — Bondor alone would stop feeding the failsafe and the vehicle would
+// surface on the bench. Hence the SEEN-THEN-LOST latch: the companion timer can only ever
+// fail after the companion has been heard at least once. No Jetson on the bench => it was
+// never seen => it cannot be "lost" => nothing changes. Jetson dies mid-mission => it WAS
+// seen => the failsafe fires even though Bondor is still chattering. Both cases correct.
 static uint32_t s_gcs_last_ms = 0;
 static bool     s_gcs_seen = false;
+static uint32_t s_companion_last_ms = 0;
+static bool     s_companion_seen = false;
 
 bool gcsLinkOk() {
     return s_gcs_seen && (millis() - s_gcs_last_ms < GCS_FAILSAFE_MS);
+}
+
+// True when a NAMED companion has been seen and has now gone quiet. False both when no
+// companion is configured and when one is configured but has never appeared.
+bool companionLost() {
+    if (!s_companion_seen) return false;                       // never seen => cannot be lost
+    return (millis() - s_companion_last_ms) >= GCS_FAILSAFE_MS;
+}
+
+bool companionConfigured() {
+    return ((int)g_params.fs_gcs_sysid != 0) || ((int)g_params.fs_gcs_compid != 0);
+}
+
+bool companionSeen() { return s_companion_seen; }
+
+// Does this heartbeat come from the configured companion? A field set to 0 is a WILDCARD, so
+// 0/0 restores the old "any non-self heartbeat" behaviour exactly — the escape hatch for an
+// operator whose companion is still on the old 255/190.
+static bool matchesCompanion(uint8_t sysid, uint8_t compid) {
+    const int want_s = (int)g_params.fs_gcs_sysid, want_c = (int)g_params.fs_gcs_compid;
+    return (want_s == 0 || sysid == want_s) && (want_c == 0 || compid == want_c);
 }
 
 void feedGcs() {
@@ -687,6 +728,11 @@ void handle(const mavlink_message_t& msg) {
             if (msg.compid != MAV_COMPONENT_ID || msg.sysid != MAV_SYSTEM_ID) {
                 s_gcs_seen = true;
                 s_gcs_last_ms = millis();
+                // ...and separately, is this the companion the failsafe is scoped to?
+                if (companionConfigured() && matchesCompanion(msg.sysid, msg.compid)) {
+                    s_companion_seen = true;
+                    s_companion_last_ms = millis();
+                }
             }
             break;
         case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
