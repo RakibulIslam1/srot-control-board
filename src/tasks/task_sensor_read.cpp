@@ -170,13 +170,38 @@ void Task_SensorRead(void* pv) {
             static bool armed_cache = false;
             { StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
               if (lk.ok()) armed_cache = g_state.control.armed; }
-            if (!armed_cache && imu.mag_accuracy >= 3 && !bno085::dcdSavedThisBoot()) {
-                bno085::saveCalibration();
+            // THRESHOLD IS 2, NOT 3, and that is the whole bug this replaces.
+            //
+            // yaw_ref refuses below accuracy 2. Requiring 3 to save meant a board sitting at
+            // 2 -- good enough to align with -- never wrote its DCD, so the next boot started
+            // at 0 again and the operator saw "Mag yaw ref refused: mag not calibrated" for
+            // ever no matter how carefully they calibrated. Accuracy cannot climb past a
+            // fresh start without a saved DCD, and the DCD was never saved without a high
+            // accuracy: a closed loop with no entry point.
+            //
+            // Save at 2, then save AGAIN whenever accuracy improves, so the stored solution
+            // tracks the best one seen rather than the first adequate one.
+            static uint8_t s_saved_at_acc = 0;
+            if (!armed_cache && imu.mag_accuracy >= 2 && imu.mag_accuracy > s_saved_at_acc) {
+                if (bno085::saveCalibration()) s_saved_at_acc = imu.mag_accuracy;
             }
         }
         if (bno085::takeDcdAnnounce()) {
+            char b[64];
+            snprintf(b, sizeof(b), "IMU cal SAVED to sensor flash (mag acc %u/3)",
+                     (unsigned)imu.mag_accuracy);
+            mav_stream::queueStatusText(MAV_SEVERITY_INFO, b);
+        }
+        // A save that was ATTEMPTED and failed is worth hearing about exactly once -- the
+        // silent version of this is what made the calibration look like it was saving when
+        // nothing was.
+        if (bno085::takeCalConfigAnnounce()) {
             mav_stream::queueStatusText(MAV_SEVERITY_INFO,
-                                        "IMU calibration saved to sensor flash");
+                                        "IMU dynamic calibration ON - rotate to converge");
+        }
+        if (bno085::takeDcdFailAnnounce()) {
+            mav_stream::queueStatusText(MAV_SEVERITY_ERROR,
+                                        "IMU cal save FAILED (sensor refused sh2_saveDcdNow)");
         }
 
         // NOT DISABLING THE MAG REPORT. It was implemented and backed out on the bench.

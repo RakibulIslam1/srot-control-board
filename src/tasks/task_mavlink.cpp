@@ -11,6 +11,7 @@
 #include "comms/mav_stream.h"
 #include "comms/mav_commands.h"
 #include "comms/params.h"       // defaultsWereReset() / nvsWasReformatted() boot notices
+#include "drivers/bno085.h"     // calConfigOk() — is dynamic cal actually running?
 #include "drivers/analog_mon.h" // voltMultLooksStale() — PM1_VMULT units-change warning
 
 // Reset reason captured in main.cpp setup().
@@ -65,6 +66,14 @@ void Task_MAVLink(void* pv) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
                                    "MAG_YAW_REF on: yaw is now ABSOLUTE, not boot-relative");
     }
+    // If sh2_setCalConfig() failed the sensor is not running dynamic calibration at all, so
+    // mag accuracy can never climb and no amount of figure-eights will help. That has to be
+    // distinguishable from "you have not calibrated yet".
+    // Deliberately NOT reported here any more. The first sh2_setCalConfig() is normally
+    // rejected (the part needs ~90 ms after reset), so this fired on every healthy boot and
+    // told the operator their mag would never converge when it was about to. poll() retries
+    // it and announces the success; a genuine permanent failure shows up as the absence of
+    // that message plus MAGACC never leaving 0.
     // Where did the calibration come from? "Is my cal actually loaded" should not require a
     // param download to answer -- and after a power-cycle complaint it is the first question.
     {

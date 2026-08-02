@@ -29,6 +29,7 @@ struct Snap {
     float   pm1 = 0, pm2 = 0, curr = 0;
     bool    pm1_present = false, pm2_present = false;
     bool    leak = false, kill = false;
+    uint8_t mag_acc = 0;        // BNO085 magnetic accuracy 0..3 (published as MAGACC)
     bool    imu_ok = false, depth_ok = false;   // real sensor health for SYS_STATUS
     float   stunt_prog = 0;
     bool    atune = false;
@@ -57,6 +58,7 @@ static void snapshot(Snap& s) {
             s.pm1 = x.pm1_voltage; s.pm2 = x.pm2_voltage; s.curr = x.curr_a;
             s.pm1_present = x.pm1_present; s.pm2_present = x.pm2_present;
             s.leak = x.leak; s.kill = x.kill_switch;
+            s.mag_acc = x.cal_mag;
             s.imu_ok = x.imu_valid;
             s.depth_ok = x.baro_valid && (x.baro_stamp_ms != 0) &&
                          (millis() - x.baro_stamp_ms < DEPTH_STALE_MS);
@@ -759,6 +761,11 @@ void update(uint32_t now) {
         // Live pilot gain — the gain buttons change this at runtime, so a joystick UI has
         // no other way to know the current value (JS_GAIN_DEFAULT is only the boot value).
         sendNamed(now, "GAIN", mav_commands::pilotGain());
+        // BNO085 magnetic accuracy 0..3. Published because "mag not calibrated" was
+        // previously an unfalsifiable claim: the operator could calibrate repeatedly with no
+        // way to see whether the number the refusal keys on was moving at all. yaw_ref needs
+        // >= 2, and the DCD save fires at >= 2.
+        sendNamed(now, "MAGACC", (float)s.mag_acc);
     }
     // Diagnostics: task stack high-water (words free, min ever) + free heap.
     // A stack value trending toward 0 identifies a task about to overflow/reboot.
