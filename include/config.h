@@ -445,6 +445,12 @@
 // turning relative to an arbitrary zero. Fails safe: a refused alignment leaves offset 0 and
 // behaves exactly as before, and it is announced either way.
 #define DEF_MAG_YAW_REF         1.0f        // 0 = yaw relative · 1 = align once at boot
+// Plausibility band for |B| during the one-shot alignment. Deliberately WIDE: inside a
+// hull the earth field is attenuated and distorted, and the measured magnitude says much
+// less about heading quality than the sample-agreement test does. Measured 14.7 uT raw on
+// the vehicle's own board, which a 25 uT floor rejected outright.
+#define DEF_MAG_FIELD_MIN       8.0f        // uT — below this the sensor is dead/shielded
+#define DEF_MAG_FIELD_MAX       120.0f      // uT — above this something local dominates
 #define DEF_MAG_DECL            0.4f        // deg, E positive (~0.4 E for Bangladesh)
 
 // Pilot command shaping (micro-movements).

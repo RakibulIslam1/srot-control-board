@@ -134,6 +134,8 @@ struct Params {
     // so thruster currents cannot move it. Fixes the reference, not the drift.
     float mag_yaw_ref;      // MAG_YAW_REF  0 = off (yaw relative) · 1 = align once at boot
     float mag_decl;         // MAG_DECL     local magnetic declination (deg, E positive)
+    float mag_field_min;    // MAG_FIELD_MIN uT — |B| sanity floor for the alignment
+    float mag_field_max;    // MAG_FIELD_MAX uT — |B| sanity ceiling
     float mag_align;        // MAG_ALIGN    momentary: set 1 to re-align (auto-clears)
     // Runtime-configurable GPIO assignments (peripheral pins). Changing any of
     // these needs a reboot to take effect (bus pins stay compile-time for safety).
