@@ -9,8 +9,26 @@ actually does where a doc says otherwise, and the design decisions worth preserv
 disagree, the code is ground truth — fix the doc, never 'fix' the code to match a stale
 claim."* Everything below follows it.
 
-**Verified this session:** `pio run -e esp32doit-devkit-v1` → **SUCCESS**, RAM 24.3%
-(79612 B), Flash 29.6% (931573 B). We can build the firmware ourselves now.
+**Verified this session — all six envs built, three of them do not exist:**
+
+| env | result |
+|---|---|
+| `esp32doit-devkit-v1` | ✅ **SUCCESS** — RAM 24.3% (79612 B), Flash 29.6% (931573 B) |
+| `pico` | ✅ **SUCCESS** (14m42s — the RP2350 toolchain is slow to fetch) |
+| `second-board` | ✅ **SUCCESS** (12s) |
+| `groundstation-esp32` | ❌ FAILED |
+| `esp32_4way` | ❌ FAILED — *"Nothing to build"* |
+| `esp32_4way_diag` | ❌ FAILED — *"Nothing to build"* |
+
+**The three failures are stale env definitions, not broken code.** `platformio.ini:104-170`
+declares envs whose `build_src_filter` points at **`src/groundstation/` and `src/esp32_4way/`,
+and neither directory exists in this repo** — `git log` shows they never did. Both sources live
+in the sibling repos: `srot-esc-flasher/src/esp32_4way/` and `srot-ground-station/`.
+
+So the header comment at `platformio.ini:1-16` advertising "one project, SIX envs" is wrong in
+a way that costs a new developer real time: half the documented flash commands cannot work from
+this checkout. Either delete the three envs or add a comment naming the repo that owns each.
+**The three real targets all build clean.**
 
 ---
 
