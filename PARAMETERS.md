@@ -138,13 +138,24 @@ Outer angle loop: `error × ATC_ANG_*_P → desired rate`. Inner rate loop:
 | `RPM_MAX` | 4000 | \|rpm\| that maps to full throttle. |
 | `RPM_FILT` | 0.30 | Measured-rpm IIR alpha (0..1). |
 | `RPM_SLEW` | 0 | Max output-level change per Pico cycle (0 = no slew limit). |
-| `RPM_LOOP` | 1 | **Control loop (your choice): 1 = closed-loop RPM (PI) · 0 = open-loop (feedforward).** Closed needs bidir-DShot telemetry (Bluejay); open works with any ESC. Pushed live to the Pico. |
+| `RPM_LOOP` | **0** | **Control loop: 0 = open-loop (recommended, the default) · 1 = closed-loop RPM (PI).** ⚠ **Do not set this to 1 for stabilisation.** An RPM setpoint loop inside the attitude path makes the vehicle oscillate — a 1° disturbance produces spin-up/stop/spin-up cycling. That is architectural, not a tuning problem (thruster dynamics are a slow nonlinear lag; no mainstream flight or ROV firmware closes a thrust loop on RPM). Use `THR_TRIM_EN` for voltage-independent thrust instead. Closed-loop needs bidir-DShot telemetry (Bluejay). Pushed live to the Pico; boot default is `THR_RPM_CLOSED_LOOP` (`config.h:218`). |
 | `DSHOT_BIDIR` | 1 | **DShot output mode: 1 = bidirectional (inverted, RPM telemetry → detection + closed loop) · 0 = normal DShot (any DShot ESC, e.g. stock BLHeli_S, spins but no RPM).** Pushed to the Pico; a change re-creates the PIO drivers **while disarmed**. Use 0 to bench a non-bidir ESC; 1 for the real setup. |
 
 ### AUTO movement (mode AUTO=23; Jetson-offloaded moves — see ALGORITHMS.md §11, JETSON_COMMS.md)
-Timer-based (duration × speed); no distance sensor/estimate. Constant distance per time comes from
-the **Pico RPM closed loop** (`THR_RPM_CLOSED_LOOP=1`, now enabled) — **precondition:** run
-**MOTOR_TUNE in water** once to fit `RPM_KP/KI/FF_A/IDLE`, else the loop may over/undershoot.
+Timer-based (duration × speed); no distance sensor/estimate.
+
+⚠ **Distance is NOT voltage-independent at defaults, and a timed move travels further on a full
+pack than a flat one.** All three mechanisms that would fix that ship **off**:
+
+| Mechanism | Param | Default | Note |
+|---|---|---|---|
+| Battery feedforward | `MOT_BAT_V_MAX` | **0** = off | set to the pack's full-charge voltage; needs the 2nd board's ESP-NOW broadcast (`ESPNOW_EN=1`) |
+| Slow per-thruster RPM trim | `THR_TRIM_EN` | **0** = off | the recommended route; not water-validated |
+| Pico closed-loop RPM | `RPM_LOOP` | **0** = off | ⚠ **not recommended** — oscillates in the stabilisation path, see the `RPM_LOOP` row above |
+
+Throttle commands **volts, not thrust** (`RPM ~ duty·V_batt/Kv`, `thrust ~ RPM²`): a T200 at the
+same PWM makes 3.71 kgf at 12 V and 6.7 kgf at 20 V. Until one of the first two is enabled and
+tuned, treat "duration × speed" as repeatable only at a **constant** state of charge.
 | Param | Default | What it does |
 |---|---|---|
 | `MOVE_CRUISE_MAX` | 0.80 | Max normalized cruise speed (clamps the command's speed). |

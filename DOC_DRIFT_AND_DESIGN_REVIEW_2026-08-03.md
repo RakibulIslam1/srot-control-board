@@ -16,19 +16,21 @@ claim."* Everything below follows it.
 | `esp32doit-devkit-v1` | ✅ **SUCCESS** — RAM 24.3% (79612 B), Flash 29.6% (931573 B) |
 | `pico` | ✅ **SUCCESS** (14m42s — the RP2350 toolchain is slow to fetch) |
 | `second-board` | ✅ **SUCCESS** (12s) |
-| `groundstation-esp32` | ❌ FAILED |
-| `esp32_4way` | ❌ FAILED — *"Nothing to build"* |
-| `esp32_4way_diag` | ❌ FAILED — *"Nothing to build"* |
+| ~~`groundstation-esp32`~~ | **REMOVED** — lives in `srot-ground-station/` |
+| ~~`esp32_4way`~~ | **REMOVED** — lives in `srot-esc-flasher/` |
+| ~~`esp32_4way_diag`~~ | **REMOVED** — lives in `srot-esc-flasher/` |
 
 **The three failures are stale env definitions, not broken code.** `platformio.ini:104-170`
 declares envs whose `build_src_filter` points at **`src/groundstation/` and `src/esp32_4way/`,
 and neither directory exists in this repo** — `git log` shows they never did. Both sources live
 in the sibling repos: `srot-esc-flasher/src/esp32_4way/` and `srot-ground-station/`.
 
-So the header comment at `platformio.ini:1-16` advertising "one project, SIX envs" is wrong in
-a way that costs a new developer real time: half the documented flash commands cannot work from
-this checkout. Either delete the three envs or add a comment naming the repo that owns each.
-**The three real targets all build clean.**
+**FIXED 2026-08-03.** The three dead envs are removed and the header now says THREE, with a
+pointer to the repo that owns each of the others (both siblings already declare identical envs
+with the sources actually present, so these were pure duplicates). All three remaining targets
+re-verified green after the edit: `esp32doit-devkit-v1` 27 s, `pico` 9 s, `second-board` 12 s.
+
+**`RPM_LOOP` is also fixed** — see §1. It turned out to be worse than a wrong mechanism.
 
 ---
 
@@ -48,12 +50,23 @@ the six items below are in it.
 
 **Two that are worth more than a table row:**
 
-**`RPM_LOOP` is contradictory and it matters.** `ALGORITHMS.md:394-397` rests AUTO's
-voltage-independent repeatable distance on that loop being closed — and by the code it is
-**open**. Meanwhile `config.h:506` says *"prefer `THR_TRIM_EN` for repeatable thrust"*, which
-suggests the design moved and the docs did not follow. **A new owner cannot tell which
-mechanism is intended.** Worth settling explicitly, because it changes what AUTO's distance
-claim means.
+**`RPM_LOOP` — RESOLVED 2026-08-03, and it was worse than a wrong mechanism.**
+
+The code was never ambiguous: `THR_RPM_CLOSED_LOOP = 0` is deliberate and `config.h:206-217`
+argues it well — an RPM setpoint inside the attitude path made the vehicle oscillate (1°
+disturbance → spin-up/stop/spin-up), which is architectural rather than a tuning problem, with
+citations (Yoerger/Cooke/Slotine 1990; Smogeli/Sørensen 2009) and the observation that no
+mainstream flight or ROV firmware closes a thrust loop on RPM.
+
+So the docs were fixed, not the code — `AGENTS.md:117-121`, code is ground truth.
+
+**But checking the alternatives turned up the real problem: `THR_TRIM_EN` (0) and
+`MOT_BAT_V_MAX` (0 = off) are ALSO disabled at defaults.** So it is not that
+`ALGORITHMS.md §11.1` credited the wrong mechanism for voltage-independent distance — **no
+mechanism is active at all**, and a timed AUTO move genuinely travels further on a full pack
+than a flat one. That is a live behaviour the companion plans timed moves against, and it was
+documented as solved. All three docs now state it plainly and list the two supported routes
+(`THR_TRIM_EN`, recommended; battery feedforward, needs the 2nd board).
 
 **`HARDWARE.md` gives two different RMT fallback pin lists** — `:82` says GPIO 0/12/13/14/15,
 `:296-298` says 4/12/13/14/15/16/17/27. The second includes **GPIO4, which `:50` documents as
