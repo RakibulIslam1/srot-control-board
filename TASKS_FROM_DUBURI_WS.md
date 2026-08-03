@@ -182,3 +182,93 @@ temperature reading, which is what a leak actually is.
 
 **After your PR merges we go to water.** The gate is §1's two bench checks, and everything else
 on this list is either shipped or scoped so it does not block that.
+
+---
+
+# §7 — Payload: make the BOARD enforce the role contract (added 2026-08-03)
+
+**Why this is on your list and not ours.** The agreed companion contract is: *duburi_ws
+activates a channel; the board fires it if it is high/low configured, and REJECTS it if it
+is PWM-configured for the on-board arm; either way the companion gets a success/failure
+acknowledgement.* We have implemented our half. **Your half does not exist yet**, and the
+gap is not cosmetic:
+
+```cpp
+// mav_commands.cpp:475-481, as shipped in rev 4
+if ((int)g_params.servo_role[ch] == 2) { g_state.aux.switch_on[ch] = (p[1] >= 1500.0f); }
+else                                   { g_state.aux.servo_us[ch]  = (uint16_t)p[1]; }  // ← MOVES THE ARM
+g_state.aux.dirty = true;
+return MAV_RESULT_ACCEPTED;                                                             // ← always
+```
+
+`DO_SET_SERVO` on a role-1 channel **moves the manipulator arm and reports success.** There
+is no result value that distinguishes "fired the payload" from "swung the arm" from "did
+nothing because the channel is disabled" from "the PCA9685 is unplugged". Right now the only
+thing preventing a mission `fire()` from driving the arm mid-drop is a **host-side** role
+read we do before every shot — which is us doing your safety interlock over a lossy link.
+
+### §7A — `MAV_CMD_SROT_PAYLOAD_FIRE`, a NEW command id (please: 31001)
+
+**Do not add role-rejection to `DO_SET_SERVO` (183).** Moving a servo on a role-1 channel is
+a legitimate operation — it is how the arm and the joystick work — so rejecting it there
+would break arm control. A separate id is what lets "payload fire" have stricter rules than
+"set a servo", which is the actual requirement.
+
+| param | meaning |
+|---|---|
+| `param1` | channel, **1..16**, same 1-based convention as `DO_SET_SERVO`, same n as `SERVO{n}_ROLE` |
+| `param2` | pulse milliseconds; `0` = board default (suggest 800 ms) |
+
+| condition | result | note |
+|---|---|---|
+| `role == 2` (switch) | `MAV_RESULT_ACCEPTED` | latch ON, **board-side one-shot timer**, auto-clear to OFF |
+| `role == 1` (PWM/arm) | `MAV_RESULT_DENIED` + `STATUSTEXT` | **this is the contract**; safe here because arm/joystick never use this id |
+| `role == 0` (disabled) | `MAV_RESULT_DENIED` | today this is a silent ACCEPTED-and-nothing-happens |
+| channel out of 1..16 | `MAV_RESULT_DENIED` | matches `:462` |
+| `mtx_aux` miss | `MAV_RESULT_TEMPORARILY_REJECTED` | matches your existing convention at `:464` |
+
+**The board-side auto-clear is the point, not a convenience.** Today the host must send the
+OFF itself, and if that command is lost the coil stays energised forever — see §7B.
+
+Bump `SROT_FW_BEHAVIOUR_REV` to **5** in the same commit. We gate on the rev, never by probing
+with a fire, so an un-bumped rev means we keep using the old path and your work goes unused.
+
+### §7B — No failsafe de-energises a payload channel
+
+`switch_on[]` is a plain bool that nothing ever resets (`state_types.h:242-247`); only a
+reboot clears it. Grep confirms `safety_monitor.cpp`, `arming.cpp` and
+`task_control_loop.cpp` never touch `AuxState`. **A leak, a disarm, or GCS loss leaves an
+energised solenoid energised** while the vehicle surfaces. Please clear all role-2 channels
+on the leak latch and on the failsafe auto-disarm paths.
+
+### §7C — `pca9685_aux::healthy()` cannot fail
+
+`begin()` sets `s_ok = true` with no I2C probe and no ACK check (`pca9685_aux.cpp:13-21`), so
+`healthy()` always returns true and the `if (!s_ok || !s_pwm) return;` guard at `:26` can
+never fire. **A physically disconnected expander ACKs exactly like a working one.** Please
+read back `MODE1` after `setPWMFreq`, re-probe periodically in the 30 Hz service, and surface
+it (a `SYS_STATUS` sensor bit, or a `NAMED_VALUE_FLOAT "AUXOK"`). Then we can report
+NOT_READY instead of a confident FIRED.
+
+### §7D — optional: any payload readback at all
+
+`g_state.aux` is never streamed. With §7C that is survivable; without it there is no way for
+anyone to know a channel actually latched, or to notice one stuck ON.
+
+---
+
+## Two things we fixed on our side that touch your wire
+
+1. **`ACK_TEMPORARILY_REJECTED` was 3 in `srot_protocol.py`; it is 1.** Verified against your
+   own `lib/mavlink/common/common.h:1151`. `3` is `MAV_RESULT_UNSUPPORTED`. So every real
+   mutex-miss you returned was read by us as non-terminal and burned the full ACK budget into
+   a bogus `TIMEOUT` + brake, and every `UNSUPPORTED` you returned was reported to the
+   operator as "board busy, safe to retry". **No wire change on your side** — we were
+   misreading a correct answer. `test_srot_protocol_drift.py` now parses `MAV_RESULT_*`
+   straight out of your `common.h` so this cannot drift again.
+
+2. **`config.h:245` is misleading and cost us real time.** It says *"Edit `PCA_CH_ROLE` below
+   to match how your expander is wired"*, but `PCA_CH_ROLE_INIT` (`:268-271`) has **no
+   consumer anywhere** — roles come only from `SERVO{n}_ROLE`. It reads like a fixed
+   1-8/9-16 wiring rule, which is exactly the folklore we just removed from our side. Please
+   delete it or mark it dead.
