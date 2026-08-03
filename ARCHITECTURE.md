@@ -117,10 +117,13 @@ linearization (`MOT_THST_EXPO`) → deadband lift into `[MOT_SPIN_MIN,1]` → 3D
 ### Thruster backend (`config.h THRUSTER_BACKEND`)
 - **RMT** — on-board ESP32 DShot on the 8 thruster pins; rebuilds a frame only on change,
   always re-emits; disarmed = 0. No RPM.
-- **PICO** (default) — the task sends the 8 values (or, with `THR_RPM_CLOSED_LOOP`, signed
-  target RPMs) to a **Pico 2 co-processor** over UART2. The Pico drives bidirectional DShot,
-  runs a per-motor **closed-loop RPM PI** (voltage-independent thrust), and returns RPM +
-  fault flags → `ESC_STATUS` + a `STATUSTEXT` on a fault. Wiring: `HARDWARE.md`.
+- **PICO** (default) — the task sends the 8 throttle values to a **Pico 2 co-processor** over
+  UART2. The Pico drives bidirectional DShot and returns RPM + fault flags → `ESC_STATUS` +
+  a `STATUSTEXT` on a fault. Wiring: `HARDWARE.md`.
+  The Pico *can* also close a per-motor **RPM PI** loop (`RPM_LOOP=1`, boot default
+  `THR_RPM_CLOSED_LOOP` = **0**), but that is **off on purpose**: an RPM setpoint inside the
+  stabilisation path makes the vehicle oscillate. RPM is used for telemetry, health and the
+  slow `thrust_trim` gain — not as a control setpoint. See ALGORITHMS.md §9/§11.1.
 
 ### Safety & housekeeping
 Failsafes (leak / low-batt / GCS-loss → SURFACE); arming enforcement (the 2nd-board

@@ -264,7 +264,7 @@ cost us time, all verified against `8cb4203`:
 | "6 = done" for `MV_STATE` | `JETSON_COMMS.md:277`, `DUBURI_WS_INTEGRATION.md:217` | `HOLD=6`, `DONE=7` |
 | "a new command preempts the running one (a quick brake first)" | `JETSON_COMMS.md:86` | `task_control_loop.cpp:398-402` calls `movement::start()` with no `abort()` between — no null-momentum phase |
 | `RPM_LOOP` default 1, `RPM_MAX` 4000, `MOT_SPIN_MIN` 0.10 | `PARAMETERS.md:105-109,135` | 0, 3600, 0.02 (`config.h:380,445,464`) |
-| "constant distance comes from the Pico RPM closed loop (now enabled)" | `PARAMETERS.md:112`, `ALGORITHMS.md:395` | `THR_RPM_CLOSED_LOOP = 0` and `config.h:206-214` says it must stay 0 |
+| ~~"constant distance comes from the Pico RPM closed loop (now enabled)"~~ **FIXED 2026-08-03** | `PARAMETERS.md`, `ALGORITHMS.md §11.1`, `ARCHITECTURE.md` | You were right, and it was worse than a wrong mechanism: `RPM_LOOP`, `THR_TRIM_EN` **and** `MOT_BAT_V_MAX` are all 0 at defaults, so **no** voltage compensation is active and a timed move really does travel further on a full pack. All three docs now say so and list the two supported routes. |
 | "191 params" / "190+" / "113+26+80" | `mav_commands.cpp:48`, `JETSON_COMMS.md:231`, `PARAMETERS.md:11` | **227** (147 scalar rows incl. 26 CAL + 80 servo) |
 | "UART2 … 2 Mbaud" | `HARDWARE.md:218`, `thruster_link_proto.h:7`, `pico/main.cpp:6` | 1 Mbaud (`config.h:191`) |
 | `docs/T200_PROFILE.md` | referenced by `docs/ESC_FLASHING.md` step 3 and by the flasher repo | **file does not exist** |

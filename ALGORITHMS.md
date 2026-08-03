@@ -389,13 +389,28 @@ strafe / turn / dive / arc / style / stop / hold) into thruster demands, with he
 depth-hold running around it in the control loop. Commanded over `MAV_CMD_SROT_MOVE` — see
 `JETSON_COMMS.md`.
 
-### 11.1 Voltage-independent cruise → repeatable distance (timer-based)
+### 11.1 Timer-based cruise — and why distance is NOT voltage-independent at defaults
 Translation runs the axis at a **speed** `S ∈ [0, MOVE_CRUISE_MAX]` for a **duration** — the system
-is purely time-based, no distance sensor or estimate. Because the Pico closes an **RPM** loop (§9,
-enabled via `THR_RPM_CLOSED_LOOP=1`), speed `S` maps to a target RPM `S·THR_MAX_RPM` that the Pico
-holds regardless of battery voltage — so "duration × speed" travels the **same distance every run**
-(full or low battery), provided the RPM gains are fitted (MOTOR_TUNE, §9/§ MOTOR_TUNE). Start is
-ramped: `S_cur ← min(S_cur + MOVE_ACCEL·dt, S)` (no lurch).
+is purely time-based, no distance sensor or estimate. Start is ramped:
+`S_cur ← min(S_cur + MOVE_ACCEL·dt, S)` (no lurch).
+
+> ⚠ **This section previously claimed "the same distance every run (full or low battery)" on the
+> grounds that the Pico closes an RPM loop with `THR_RPM_CLOSED_LOOP=1`. The code has that
+> `#define` at 0** (`config.h:218`), deliberately and with reasons — see §9 and the `RPM_LOOP`
+> note. **`THR_TRIM_EN` and `MOT_BAT_V_MAX` are also 0 by default**, so at shipped settings
+> **no** voltage compensation is active and a timed move genuinely travels further on a full pack.
+
+`S` maps to a commanded **throttle**, and throttle commands volts rather than thrust
+(`RPM ~ duty·V_batt/Kv`, `thrust ~ RPM²`) — a T200 at the same PWM makes 3.71 kgf at 12 V and
+6.7 kgf at 20 V. To make "duration × speed" repeatable across a discharge, enable **one** of:
+
+| Route | Enable | Status |
+|---|---|---|
+| **`THR_TRIM_EN`** — slow per-thruster RPM trim, ~10 Hz, outside the fast loop | `THR_TRIM_EN=1` | **recommended**; not water-validated |
+| **Battery feedforward** — mixer linearisation on pack voltage | `MOT_BAT_V_MAX=<full-charge V>` + `ESPNOW_EN=1` | needs the 2nd board broadcasting |
+| ~~Pico closed-loop RPM~~ | `RPM_LOOP=1` | ⚠ **not recommended for stabilisation** — an RPM setpoint inside the attitude path oscillates (1° disturbance → spin-up/stop/spin-up). Architectural, not a tuning problem |
+
+Until then, treat a timed move as repeatable only at a **constant** state of charge.
 
 ### 11.2 On-board braking (no coast / no drift)
 At the end of the duration the ESP32 does **not** coast — it applies **reverse thrust** along the
