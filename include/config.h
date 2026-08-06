@@ -127,8 +127,14 @@
 
 // --- Analog inputs (input-only ADC1) ---
 #define PIN_LEAK               35           // digital leak input (LEAK_EN; needs external bias)
-#define PIN_BATT_VOLT          36           // battery voltage ADC (PM1 when PM1_SRC=1)
-#define PIN_BATT_CURR          39           // battery current ADC
+// SWAPPED 2026-08-06 at the operator's request: the divider is physically on 39 and the
+// current shunt on 36, the opposite of the original assignment. Both are ADC1 and input-only,
+// so the swap is electrically symmetric. NOTE these are also PARAMETERS (PIN_BATTVOLT /
+// PIN_BATTCURR, params.cpp) and a stored value beats a changed default -- see the one-shot
+// migration in params::init(), without which this swap would not reach a board already in
+// service. That is the same trap PM1_VMULT fell into for two rounds.
+#define PIN_BATT_VOLT          39           // battery voltage ADC (PM1 when PM1_SRC=1)
+#define PIN_BATT_CURR          36           // battery current ADC
 #define LEAK_ACTIVE_HIGH        1           // 1: HIGH = leak detected
 #define BATT_CURR_MULT          0.0f        // A per raw LSB (set once you have a current sensor)
 
@@ -399,7 +405,9 @@
 // 11.28 reproduces the old full-scale (0.009088 V/count x 4095 counts = 37.2 V) against a
 // 3.3 V input, so it is the closest equivalent starting point — but it is a STARTING POINT.
 // Calibrate: PM1_VMULT_new = PM1_VMULT_now x (multimeter reading / reported reading).
-#define DEF_PM1_VMULT           11.28f
+// 9.8 set by the operator 2026-08-06 from a multimeter comparison on the real divider.
+// 11.28 was only ever a STARTING POINT derived from the old full-scale, never a measurement.
+#define DEF_PM1_VMULT           9.8f
 // PM2 arrives pre-scaled (in volts) from the 2nd board over ESP-NOW, so this is a TRIM, not a
 // divider ratio: 1.0 = report exactly what the 2nd board sends. Use it to correct the thruster
 // pack reading from the GCS without reflashing the 2nd board —
@@ -714,6 +722,10 @@
 // vehicle was still reporting 0.01 V a round later. Same marker discipline: run once per board,
 // then never touch the operator's value again.
 #define NVS_KEY_PM1_MIGRATED    "p_pm1mig"
+// Second one-shot for PM1: the volt/curr PIN swap and the 9.8 multiplier. A separate marker
+// from p_pm1mig because that one already ran on boards in service -- reusing it would make
+// this migration a no-op exactly where it is needed.
+#define NVS_KEY_PM1_PINS_MIG    "p_pm1pin"
 // One-shot migration for MAG_YAW_REF 0 -> 1. Needed because a PARAM_DEFAULTS_VER boot WRITES
 // every row to NVS, so boards already in service hold a stored 0 and would never see the new
 // default. Marker-gated like the others: runs once, then the operator's value is theirs.

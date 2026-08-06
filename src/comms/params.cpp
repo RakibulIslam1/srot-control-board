@@ -396,6 +396,9 @@ static bool s_pm1_vmult_migrated = false;
 // True when init() switched MAG_YAW_REF on for a board that stored the old 0.
 static bool s_mag_yaw_ref_migrated = false;
 
+// True when init() applied the PM1 pin-swap + 9.8 multiplier one-shot.
+static bool s_pm1_pins_migrated = false;
+
 void init() {
     buildTable();
 
@@ -496,6 +499,31 @@ void init() {
     // zero whenever I reset the flight controller". Changing the default alone cannot fix
     // those boards: the loop above persists every row on a defaults-version boot, so the
     // stored 0 wins. Same marker discipline as the PM1/PM2 migrations: exactly once.
+    // One-shot for the PM1 rework: the volt/curr PIN SWAP and the 9.8 multiplier.
+    //
+    // Needed for the same reason every migration here is needed: init() above PERSISTS every
+    // row on a defaults-version boot, so a board in service holds PIN_BATTVOLT=36,
+    // PIN_BATTCURR=39 and PM1_VMULT=11.28 in NVS, and a stored value always beats a changed
+    // default. Without this the pin swap would silently not reach the one board it was
+    // requested for -- which is exactly how PM1_VMULT stayed wrong for two rounds while the
+    // default said otherwise.
+    //
+    // A SEPARATE marker from NVS_KEY_PM1_MIGRATED on purpose: that one has already run on
+    // this board, so reusing it would make this migration a no-op precisely where it is
+    // needed. Markers are cheap; a silently skipped migration is not.
+    if (s_prefs.getUChar(NVS_KEY_PM1_PINS_MIG, 0) == 0) {
+        if (!force_defaults) {
+            g_params.pin_battvolt = (float)PIN_BATT_VOLT;
+            g_params.pin_battcurr = (float)PIN_BATT_CURR;
+            g_params.pm1_vmult    = DEF_PM1_VMULT;
+            s_prefs.putFloat("PIN_BATTVOLT", (float)PIN_BATT_VOLT);
+            s_prefs.putFloat("PIN_BATTCURR", (float)PIN_BATT_CURR);
+            s_prefs.putFloat("PM1_VMULT",    DEF_PM1_VMULT);
+            s_pm1_pins_migrated = true;
+        }
+        s_prefs.putUChar(NVS_KEY_PM1_PINS_MIG, 1);
+    }
+
     if (s_prefs.getUChar(NVS_KEY_MAGREF_MIGRATED, 0) == 0) {
         if (!force_defaults && g_params.mag_yaw_ref < 0.5f) {
             g_params.mag_yaw_ref = DEF_MAG_YAW_REF;
@@ -524,6 +552,8 @@ bool pm2VmultMigrated() { return s_pm2_vmult_migrated; }
 bool pm1VmultMigrated() { return s_pm1_vmult_migrated; }
 
 bool magYawRefMigrated() { return s_mag_yaw_ref_migrated; }
+
+bool pm1PinsMigrated() { return s_pm1_pins_migrated; }
 
 bool espnowWanted() {
     if (g_params.espnow_en <= -0.5f) return false;   // forced off
