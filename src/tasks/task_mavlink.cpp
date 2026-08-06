@@ -60,6 +60,15 @@ void Task_MAVLink(void* pv) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
                                    "PM2_VMULT migrated to 1.0 (it is now an ESP-NOW trim)");
     }
+    // The PM1 rework moved which physical PIN the pack voltage is read from. Announce it:
+    // a silent pin change is indistinguishable from a wiring fault if the reading looks odd.
+    if (params::pm1PinsMigrated()) {
+        char b[64];
+        snprintf(b, sizeof(b), "PM1 migrated: volt=GPIO%d curr=GPIO%d mult=%.1f",
+                 (int)g_params.pin_battvolt, (int)g_params.pin_battcurr,
+                 (double)g_params.pm1_vmult);
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING, b);
+    }
     // MAG_YAW_REF was switched on for a board that stored the old 0. Announce it, because
     // it changes what `yaw` MEANS -- absolute compass heading instead of relative-to-boot --
     // so a heading noted from an earlier run is no longer the same number.

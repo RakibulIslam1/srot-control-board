@@ -190,6 +190,10 @@ bool pm1VmultMigrated();
 // old relative zero is no longer comparable.
 bool magYawRefMigrated();
 
+// True if init() applied the PM1 rework one-shot: the volt/curr PIN SWAP (36<->39) and the
+// 9.8 multiplier. Announced because it silently moves which physical pin PM1 reads.
+bool pm1PinsMigrated();
+
 // Should the WiFi/ESP-NOW link to the 2nd board be running? THE single source of truth —
 // every gate (link start, OLED "OFF" vs "--", the boot warning) must ask this, or they drift
 // apart and the OLED explains a state the radio is not actually in.
