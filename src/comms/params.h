@@ -61,6 +61,10 @@ struct Params {
     float btn_func[16];
     // Focused ArduSub-compatible params.
     float frame_config;     // FRAME_CONFIG (2 = vectored, informational)
+    // FRAME_REVERSE (0/1) — negate all six axis demands before the mixer. The right knob for
+    // "every axis is backwards"; MOT_n_DIRECTION is for individual mis-wired thrusters and
+    // using it for a whole-frame flip breaks the mixer's torque patterns. See config.h.
+    float frame_reverse;
     float js_gain_default;  // JS_GAIN_DEFAULT (0..1 pilot gain)
     float lights_step;      // LIGHTS_STEP (fraction per brighter/dimmer press)
     float fs_gcs_enable;    // FS_GCS_ENABLE (GCS-loss failsafe on/off)
