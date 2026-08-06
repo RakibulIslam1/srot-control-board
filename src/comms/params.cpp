@@ -142,6 +142,9 @@ static const Desc SCALARS[] = {
     { "PM1_VMULT",      "PM1_VMULT",      &g_params.pm1_vmult,      DEF_PM1_VMULT },
     { "PM2_VMULT",      "PM2_VMULT",      &g_params.pm2_vmult,      DEF_PM2_VMULT },
     { "LEAK_EN",        "LEAK_EN",        &g_params.leak_en,        0.0f },
+    // 1 = every axis demand is negated before mixing. Fixes a frame whose axes are all
+    // backwards WITHOUT breaking the mixer patterns the way a non-uniform motor flip does.
+    { "FRAME_REVERSE",  "FRAME_REVERSE",  &g_params.frame_reverse,  DEF_FRAME_REVERSE },
     // Which source's liveness the GCS failsafe tracks, on top of "any station is alive".
     // 255/191 = MAV_COMP_ID_ONBOARD_COMPUTER, the Jetson (duburi_ws shipped 191 in 41318e7).
     // Either field 0 = wildcard = the pre-2026-08-02 "any non-self heartbeat" behaviour.

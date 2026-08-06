@@ -852,6 +852,18 @@ void Task_ControlLoop(void* pv) {
                 feedforward::apply(roll, pitch, yaw, thr, in.gx, in.gy, in.gz, in.mode, learn);
             }
 
+            // FRAME_REVERSE: negate every axis demand, right before mixing.
+            //
+            // Applied HERE, after the controllers and before the mixer, deliberately. The
+            // attitude PIDs keep working in the sensor's frame -- so their signs, integrators
+            // and the autotune relay all stay consistent -- and only the actuator side is
+            // flipped. Negating earlier (at the setpoints) would invert the pilot's stick but
+            // NOT the stabilisation loops, which is the half-fix that leaves a vehicle
+            // flyable in MANUAL and divergent in STABILIZE.
+            if (g_params.frame_reverse > 0.5f) {
+                roll = -roll; pitch = -pitch; yaw = -yaw;
+                thr  = -thr;  fwd   = -fwd;   lat = -lat;
+            }
             mixer::mix(roll, pitch, yaw, thr, fwd, lat, norm);
             mixer::toDshot(norm, in.dir, armed, dshot);
         }

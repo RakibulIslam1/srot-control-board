@@ -497,6 +497,23 @@
 // hull the earth field is attenuated and distorted, and the measured magnitude says much
 // less about heading quality than the sample-agreement test does. Measured 14.7 uT raw on
 // the vehicle's own board, which a 25 uT floor rejected outright.
+// FRAME_REVERSE — negate ALL SIX axis demands (roll/pitch/yaw/throttle/forward/lateral)
+// immediately before the mixer. 0 = normal, 1 = reversed.
+//
+// This exists because the correct place to fix "every axis is backwards" is the AXIS layer,
+// not MOT_n_DIRECTION. Flipping all eight motor directions looks equivalent -- and
+// algebraically it is, for a UNIFORM flip -- but in practice an operator fixes it by
+// flipping the motors that LOOK wrong, which lands on a non-uniform set like
+// [+1,-1,-1,-1 / -1,-1,-1,+1]. That destroys the mixer's per-axis patterns: the yaw column
+// [+1,-1,-1,+1] becomes [+1,+1,+1,-1], i.e. three thrusters pushing the same way, which is
+// not a torque at all. Observed on this hull as "manual is fixed but now it spins in
+// STABILIZE".
+//
+// Negating the demands is the clean equivalent: it flips every axis while leaving each
+// mixer pattern -- and therefore every torque -- intact. MOT_n_DIRECTION then keeps its real
+// job, which is compensating individual thrusters that are physically wired backwards.
+#define DEF_FRAME_REVERSE       0.0f
+
 #define DEF_MAG_FIELD_MIN       8.0f        // uT — below this the sensor is dead/shielded
 #define DEF_MAG_FIELD_MAX       120.0f      // uT — above this something local dominates
 #define DEF_MAG_DECL            0.4f        // deg, E positive (~0.4 E for Bangladesh)
