@@ -691,7 +691,20 @@
 //      suppresses WTEMP/SCALED_PRESSURE2 and refuses DEPTH_HOLD/AUTO. Published as BARO_P2P
 //      (ungated, so it can explain WHY depth withdrew). Finding and fix requested by
 //      duburi_ws -- BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md.
-#define SROT_FW_BEHAVIOUR_REV   5
+//   6  2026-08-06. MOTOR_DETECT NOW CONVERGES, AND CANNOT WIPE A GOOD CALIBRATION.
+//      Two faults, both found on the 4.5 hull after an in-water session where every axis
+//      was reversed and STABILIZE flipped. (a) The detect pulse is driven THROUGH in.dir[],
+//      so what it measures is an AGREEMENT, not an absolute direction — storing it as the
+//      new absolute cal discarded the correction it was measured through, and the routine
+//      converged only when CAL_MDIRn was already +1. A thruster that started inverted
+//      stayed inverted through any number of detect runs. It now COMPOSES
+//      (cal *= agreement), which is correct from any starting state in one pass and is
+//      idempotent. (b) An inconclusive detect defaulted to +1 and STORED it, so a run in
+//      air — where 0.30 throttle never crosses the 0.05 rad/s gate — silently reset all
+//      eight thrusters to +1, reported SUCCESS and was persisted to flash. It now leaves
+//      the stored value untouched and finishes FAIL, which also keeps persist_pending
+//      clear so a failed detect can never reach flash. Reported by duburi_ws.
+#define SROT_FW_BEHAVIOUR_REV   6
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.

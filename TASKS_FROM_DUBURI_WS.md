@@ -272,3 +272,73 @@ anyone to know a channel actually latched, or to notice one stuck ON.
    consumer anywhere** — roles come only from `SERVO{n}_ROLE`. It reads like a fixed
    1-8/9-16 wiring rule, which is exactly the folklore we just removed from our side. Please
    delete it or mark it dead.
+
+---
+
+# §8 — MOTOR_DETECT fixed by duburi_ws (2026-08-06) — NEEDS FLASH + IN-WATER RUN
+
+**This one is ours, not a request.** The change is written, builds clean
+(`esp32doit-devkit-v1`, RAM 24.3 %, Flash 29.6 %) and is **not flashed** — the board is in
+a hull mid-testing and flashing is your call with it in hand.
+
+### What went wrong on the vehicle
+
+In-water session: every joystick axis reversed in MANUAL, and STABILIZE flipped the hull.
+Root cause was a globally inverted thrust sense **plus** two thrusters (1 and 8) inverted
+*relative to their groups*. The operator reversed all eight `MOT_n_DIRECTION`, which fixed
+the global sense but — necessarily — could not fix a *relative* asymmetry: multiplying
+every element by −1 cannot change which elements differ from each other. STABILIZE then
+span in yaw (motor 1 carries yaw) and autotune reported `RollRate … CLAMP` /
+`PitchRate FAIL: period unstable` (motor 8 carries roll+pitch, halving both and
+cross-coupling heave into them).
+
+### The two firmware faults
+
+Both in `calibration.cpp`, `CalRoutine::MOTOR_DETECT`, DETECT phase.
+
+**1. It overwrote where it had to compose.** `driveTestMotor()` sets `test_override`, and
+`task_control_loop.cpp:789` drives that through `oneToDshot(test_throttle, in.dir[motor])`
+— so the pulse goes through the *existing* direction, and what you measure is an
+**agreement**, not an absolute direction. With `c = CAL_MDIRn`, `p = MOT_n_DIRECTION`,
+`s` = the thruster's intrinsic sign:
+
+```
+agreement      = c·p·s
+OVERWRITE  c' = c·p·s          -> effective c'·p = c·s  -> result = c
+COMPOSE    c' = c·(c·p·s) = p·s -> effective c'·p = s    -> result = +1
+```
+
+The old form converges **only if `c` was already +1**, and otherwise locks the existing
+error in permanently — no number of detect runs can fix a thruster that starts inverted.
+That is exactly why motors 1 and 8 stayed wrong on this hull while the other six were
+fine. Composing is correct from any starting state in one pass, and is idempotent.
+
+**2. An inconclusive detect wiped the calibration.** `dir` was initialised to `1` and
+stored unconditionally, so a run that measured nothing — in air, or a restrained hull,
+where 0.30 throttle never crosses the 0.05 rad/s gate — silently reset all eight thrusters
+to `+1`, reported SUCCESS, and was persisted to flash. A calibration routine must not
+destroy a good calibration as its failure mode. It now leaves the stored value untouched
+and calls `finish(CalResult::FAIL)`, which also keeps `persist_pending` clear so a failed
+run cannot reach flash.
+
+`SROT_FW_BEHAVIOUR_REV` bumped **5 → 6**. Nothing for the companion to adapt to (duburi_ws
+never runs MOTOR_DETECT), but it changes what an operator should expect from Bondor: a
+detect can now legitimately report FAIL, and that is the routine working correctly.
+
+### What we ask of you
+
+1. **Review the reasoning above**, particularly the compose algebra. It was worked through
+   analytically and verified against the observed hull behaviour, but it was **not**
+   reviewed by a second pair of eyes before writing — please treat it as needing yours.
+2. **Flash it**, then run **MOTOR_DETECT in water, armed**. It should converge every
+   thruster in one pass. After that nobody should ever hand-set `MOT_n_DIRECTION` again —
+   that param goes back to being a pure operator override, which is what it is for.
+3. Note the erase/NVS caveat still applies: flashing loses the `CAL_*` block, so take a
+   Bondor param export first. Losing `CAL_MDIR` is now harmless *provided* step 2 is run.
+
+### Interim state on the vehicle (rev 5, unflashed)
+
+We set `MOT_1_DIRECTION = -1` and `MOT_8_DIRECTION = -1` live and confirmed by readback,
+giving a uniform effective `[-1] × 8`. **Runtime only, deliberately not saved** — a power
+cycle reverts it. That keeps the hull flyable now; the firmware fix is what makes it stop
+happening.
