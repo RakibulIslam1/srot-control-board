@@ -35,4 +35,11 @@ bool healthy();
 // a sensor is bad — it distinguishes a genuinely corrupt PROM from a CRC implementation bug.
 uint16_t promWord(uint8_t i);
 
+// True when the pressure STREAM is noise even though every sample is individually plausible
+// -- a failing sensor produced 317..874 mbar on a stationary bench and the per-sample bands
+// passed all of it. Folded into healthy(), so depth withdraws from the stack. Published as
+// BARO_P2P for the operator.
+bool  jittery();
+float jitterP2P();   // peak-to-peak mbar over the current window
+
 }  // namespace bar30

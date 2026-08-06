@@ -43,6 +43,53 @@ static const float TEMP_MAX_C   = 60.0f;
 static const float PRESS_MIN_MB = 300.0f;      // ~9000 m altitude, far below any pool
 static const float PRESS_MAX_MB = 40000.0f;    // ~300 m depth, past the Bar30's range
 
+// --- JITTER GATE -------------------------------------------------------------------
+//
+// A PER-SAMPLE BAND IS STRUCTURALLY BLIND TO VARIANCE, and that blindness had teeth.
+//
+// duburi_ws measured this board on 2026-08-02 (BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md):
+// a failing Bar30 produced 317..874 mbar and 6..30 C from sample to sample, on a stationary
+// bench. EVERY ONE of those readings sits inside the bands above -- they are deliberately
+// wide so a judgement call cannot ground the vehicle -- so SCALED_PRESSURE2 and WTEMP kept
+// streaming, the SYS_STATUS health bit stayed SET, and DEPTH_HOLD/AUTO stayed available
+// while the derived depth wandered six metres.
+//
+// That is also the whole of the arming spin-up: phantom depth -> DEPTH_ERR -3..-6.7 m ->
+// DEPTH_OUT saturated at -1.0 -> the mixer's -1 throttle column -> all four verticals at
+// full, horizontals at idle. Exactly the symptom, with nothing left over.
+//
+// Peak-to-peak over a short window catches what a band cannot. Real depth cannot change by
+// this much this fast on a vehicle that is not moving, and even a genuine fast descent is
+// bounded far below it.
+//
+// The threshold is DELIBERATELY LOOSE (~15 mbar p2p ~= 15 cm of water). Wave action, a
+// thruster wash over the port and a real descent all produce real variance; this is aimed at
+// the 500+ mbar garbage that is unambiguously a broken sensor, not at tight sensor QA.
+//
+// The board is the right place for this even though duburi_ws added a host-side check too:
+// they can only refuse to ARM, the board can refuse AUTO.
+static const uint8_t JITTER_N          = 8;      // samples in the window (~0.4 s at 20 Hz)
+static const float   JITTER_MAX_MBAR   = 15.0f;  // peak-to-peak above this = not a sensor
+static float   s_hist[JITTER_N] = {0};
+static uint8_t s_hist_n = 0, s_hist_i = 0;
+static bool    s_jitter_bad = false;
+
+static void jitterReset() { s_hist_n = 0; s_hist_i = 0; s_jitter_bad = false; }
+
+// Feed one accepted pressure sample; returns true when the window looks like noise.
+static bool jitterCheck(float press) {
+    s_hist[s_hist_i] = press;
+    s_hist_i = (uint8_t)((s_hist_i + 1) % JITTER_N);
+    if (s_hist_n < JITTER_N) { ++s_hist_n; return false; }   // not enough history yet
+    float lo = s_hist[0], hi = s_hist[0];
+    for (uint8_t i = 1; i < JITTER_N; ++i) {
+        if (s_hist[i] < lo) lo = s_hist[i];
+        if (s_hist[i] > hi) hi = s_hist[i];
+    }
+    s_jitter_bad = (hi - lo) > JITTER_MAX_MBAR;
+    return s_jitter_bad;
+}
+
 static bool tryBegin() {
     // MS5837_TYPE_30 = Bar30 (30 bar) variant.
     // begin() -> reset() now enforces the post-RESET PROM delay AND validates the PROM CRC,
@@ -65,6 +112,7 @@ bool begin() {
         s_ok = tryBegin();
     }
     s_fail_n = 0;
+    jitterReset();
     s_last_retry_ms = millis();
     return s_ok;
 }
@@ -113,6 +161,15 @@ bool read(Sample& out, float surface_mbar) {
         return false;
     }
 
+    // The sample is individually plausible. Is the STREAM?
+    if (jitterCheck(press)) {
+        // Do NOT touch s_fail_n: this is not a failed read, it is a sensor whose readings
+        // cannot be trusted as a set. healthy() consults s_jitter_bad separately, so depth
+        // withdraws from the stack (SCALED_PRESSURE2/WTEMP suppressed, DEPTH_HOLD/AUTO
+        // refused) without the read-failure recovery path fighting it.
+        return false;
+    }
+
     out.pressure_mbar = press;
     out.temp_c        = temp;
     out.depth_m       = depth;
@@ -120,7 +177,19 @@ bool read(Sample& out, float surface_mbar) {
     return true;
 }
 
-bool healthy() { return s_ok && s_fail_n < FAIL_UNHEALTHY; }
+bool healthy() { return s_ok && s_fail_n < FAIL_UNHEALTHY && !s_jitter_bad; }
+
+bool jittery() { return s_jitter_bad; }
+
+float jitterP2P() {
+    if (s_hist_n == 0) return 0.0f;
+    float lo = s_hist[0], hi = s_hist[0];
+    for (uint8_t i = 1; i < s_hist_n; ++i) {
+        if (s_hist[i] < lo) lo = s_hist[i];
+        if (s_hist[i] > hi) hi = s_hist[i];
+    }
+    return hi - lo;
+}
 
 uint16_t promWord(uint8_t i) { return s_ms.promRaw(i); }
 

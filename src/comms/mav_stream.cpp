@@ -5,9 +5,10 @@
 #include "comms/mav_stream.h"
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
-#include "comms/params.h"
-#include "control/depth_control.h"
-#include "control/mixer.h"        // mix() is pure — preview the depth chain disarmed  // preview()/lastError() — depth-loop observability   // g_params.leak_en — the LEAK health bit's "enabled" state
+#include "comms/params.h"            // g_params.leak_en — the LEAK health bit's "enabled" state
+#include "control/depth_control.h"   // preview()/lastError() — depth-loop observability
+#include "control/mixer.h"           // mix() is pure — preview the depth chain disarmed
+#include "drivers/bar30.h"           // jitterP2P() — why depth withdrew
 #include "comms/ui_log.h"
 #include "config.h"
 #include "state_types.h"
@@ -768,6 +769,10 @@ void update(uint32_t now) {
         // way to see whether the number the refusal keys on was moving at all. yaw_ref needs
         // >= 2, and the DCD save fires at >= 2.
         sendNamed(now, "MAGACC", (float)s.mag_acc);
+        // Baro peak-to-peak over the jitter window. Published unconditionally (NOT gated on
+        // depth_ok) because its whole job is to explain WHY depth just withdrew -- gating it
+        // on the health it reports on would hide it exactly when it matters.
+        sendNamed(now, "BARO_P2P", bar30::jitterP2P());
         // DEPTH LOOP OBSERVABILITY (AUDIT R1). This loop has never run closed, and the
         // documented bench check ("hand-move the vehicle in DEPTH_HOLD") only works in
         // WATER — in air a metre of height is ~1.2 mm of equivalent depth. So the sign was
