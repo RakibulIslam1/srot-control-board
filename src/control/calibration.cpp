@@ -127,6 +127,9 @@ static int8_t      s_motor_idx = 0;
 static int         s_md_phase = 0;      // motor-detect: 0=settle,1=thrust,2=detect
 static uint32_t    s_md_t = 0;
 static float       s_md_peak[3] = {0, 0, 0};
+// Set when ANY thruster's detect was inconclusive, so the routine reports FAIL and is
+// therefore never persisted (finish() only flags persist_pending on SUCCESS).
+static bool        s_md_inconclusive = false;
 
 static void beginRoutine(CalRoutine r, uint32_t now) {
     s_active = r; s_start = now; s_count = 0;
@@ -134,6 +137,7 @@ static void beginRoutine(CalRoutine r, uint32_t now) {
     for (int i = 0; i < 3; ++i) { s_min[i] = 1e9f; s_max[i] = -1e9f; }
     s_face_mask = 0; s_last_step = 0xFF; s_motor_idx = 0;
     s_md_phase = 0; s_md_t = now; s_md_peak[0] = s_md_peak[1] = s_md_peak[2] = 0;
+    s_md_inconclusive = false;
     StateLock lk(g_state.mtx_cal);
     if (lk.ok()) {
         g_state.cal.progress = 0;
@@ -315,9 +319,14 @@ void update(float roll, float pitch, float yaw,
         case CalRoutine::MOTOR_DETECT: {
             // ArduSub-style per-motor detect (run in water, ARMED): settle until
             // gyro quiet, pulse the motor up, compare the measured gyro to the
-            // frame's expected angular factor, and store MOTn_DIR (±1).
+            // frame's expected angular factor, and CORRECT MOTn_DIR by what it finds.
+            //
+            // "Correct by", not "set to" — that distinction is the whole fix, see the
+            // DETECT phase below.
             float gmag = sqrtf(gx * gx + gy * gy + gz * gz);
-            if (s_motor_idx >= NUM_THRUSTERS) { finish(); break; }
+            if (s_motor_idx >= NUM_THRUSTERS) {
+                finish(s_md_inconclusive ? CalResult::FAIL : CalResult::SUCCESS); break;
+            }
             if (s_md_phase == 0) {                 // SETTLE — hold neutral, wait quiet 500 ms
                 driveTestMotor(-1, 0, 100);
                 if (gmag > 0.15f) s_md_t = now;
@@ -333,12 +342,54 @@ void update(float roll, float pitch, float yaw,
                 float e[3]; mixer::motorAngular(s_motor_idx, e[0], e[1], e[2]);
                 int dom = 0;
                 for (int a = 1; a < 3; ++a) if (fabsf(e[a]) > fabsf(e[dom])) dom = a;
-                int8_t dir = 1;
-                if (fabsf(e[dom]) > 0.1f && fabsf(s_md_peak[dom]) > 0.05f)
-                    dir = ((s_md_peak[dom] > 0) == (e[dom] > 0)) ? 1 : -1;
-                { StateLock lk(g_state.mtx_cal); if (lk.ok()) g_state.cal.motor_dir[s_motor_idx] = dir; }
+
+                if (fabsf(e[dom]) > 0.1f && fabsf(s_md_peak[dom]) > 0.05f) {
+                    // WHAT WE JUST MEASURED IS AN AGREEMENT, NOT AN ABSOLUTE DIRECTION.
+                    // The thrust pulse above is driven through in.dir[] — the test-override
+                    // branch in task_control_loop calls oneToDshot(test_throttle,
+                    // in.dir[motor]) — so the response we measured is the thruster's
+                    // response WITH its current correction already applied.
+                    //
+                    // Storing that agreement as the new absolute cal therefore discards the
+                    // correction it was measured through. With c = cal.motor_dir,
+                    // p = MOT_n_DIRECTION and s = the thruster's intrinsic sign:
+                    //
+                    //     agreement       = c*p*s
+                    //     OVERWRITE: c' = c*p*s        -> effective c'*p = c*s  -> result = c
+                    //     COMPOSE:   c' = c*(c*p*s)=p*s -> effective c'*p = s   -> result = +1
+                    //
+                    // The overwrite form converges ONLY when c was already +1, and locks in
+                    // the existing error otherwise — so a thruster that starts wrong stays
+                    // wrong through any number of detect runs, and no amount of re-running
+                    // MOTOR_DETECT can ever fix it. That is exactly how two thrusters on the
+                    // 4.5 hull stayed inverted while the other six were fine.
+                    //
+                    // Composing is correct from ANY starting state in one pass, and is
+                    // idempotent: a second run measures agreement = +1 and changes nothing.
+                    int8_t agree = ((s_md_peak[dom] > 0) == (e[dom] > 0)) ? 1 : -1;
+                    StateLock lk(g_state.mtx_cal);
+                    if (lk.ok()) {
+                        int8_t cur = g_state.cal.motor_dir[s_motor_idx];
+                        if (cur == 0) cur = 1;          // never multiply a stored 0 to 0
+                        g_state.cal.motor_dir[s_motor_idx] = (int8_t)(cur * agree);
+                    }
+                } else {
+                    // INCONCLUSIVE — LEAVE THE STORED VALUE ALONE.
+                    //
+                    // This used to default to +1 and store it. So a detect run that measured
+                    // nothing — in air, or on a restrained hull, where 0.30 throttle moves
+                    // the gyro far less than the 0.05 rad/s gate — silently reset every
+                    // thruster to +1, reported SUCCESS, and got persisted to flash. A
+                    // calibration routine must never destroy a good calibration as its
+                    // failure mode. Not writing makes a failed detect a no-op.
+                    s_md_inconclusive = true;
+                }
                 s_motor_idx++; s_md_phase = 0; s_md_t = now;
-                if (s_motor_idx >= NUM_THRUSTERS) { finish(); break; }
+                if (s_motor_idx >= NUM_THRUSTERS) {
+                    // FAIL keeps persist_pending clear, so an inconclusive run cannot reach
+                    // flash and cannot be mistaken for a completed calibration.
+                    finish(s_md_inconclusive ? CalResult::FAIL : CalResult::SUCCESS); break;
+                }
             }
             setProgress((float)s_motor_idx / NUM_THRUSTERS);
             break;
