@@ -682,7 +682,16 @@
 //      turns to the heading it is given. The BNO085's own calibration is persisted to sensor
 //      flash, so mag accuracy survives a power cycle instead of restarting at 0; and the mag
 //      REPORT stops once the one-shot reference locks (it never fed attitude).
-#define SROT_FW_BEHAVIOUR_REV   4
+//   5  2026-08-03. BARO JITTER GATE: the barometer is now judged on the VARIANCE of the
+//      stream, not only on per-sample plausibility. A failing Bar30 produced 317-874 mbar
+//      sample-to-sample on a stationary bench and every reading sat INSIDE the wide
+//      plausibility bands, so depth stayed "healthy" while wandering six metres -- and that
+//      phantom depth saturated the depth PID and drove all four verticals to full on arming.
+//      Peak-to-peak > 15 mbar over an 8-sample window now marks the baro unhealthy, which
+//      suppresses WTEMP/SCALED_PRESSURE2 and refuses DEPTH_HOLD/AUTO. Published as BARO_P2P
+//      (ungated, so it can explain WHY depth withdrew). Finding and fix requested by
+//      duburi_ws -- BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md.
+#define SROT_FW_BEHAVIOUR_REV   5
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
