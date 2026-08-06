@@ -242,7 +242,14 @@
 //   PCA_SWITCH   : digital HIGH/LOW to drive a payload MOSFET or relay ON/OFF
 // Driven by Task_UI_Status (Core 0) from AuxState. Controllable from QGC via
 // MAV_CMD_DO_SET_SERVO (servo) and MAV_CMD_DO_SET_RELAY (switch).
-// Edit PCA_CH_ROLE below to match how your expander is wired.
+//
+// ⚠ ROLES ARE PER-CHANNEL PARAMS, NOT A COMPILE-TIME MAP. Set SERVOn_ROLE (Bondor
+// or PARAM_SET); the default is (channel < 8) ? SERVO : SWITCH, applied in
+// params.cpp buildTable(). PCA_CH_ROLE_INIT below has NO consumer -- see the note
+// on it. An earlier version of this comment said "edit PCA_CH_ROLE to match how
+// your expander is wired", which sent two teams looking for a wiring map that does
+// not exist and hardened a "1-8 servo / 9-16 switch" folklore that is only a
+// default. Every channel is independently re-rolable at runtime.
 // -----------------------------------------------------------------------------
 #define PCA9685_NUM_CH          16
 #define PCA9685_PWM_FREQ        50          // Hz — 50 for standard servos
@@ -264,11 +271,44 @@
 #define PCA_LIGHTS2_CH          7    // servo-role channel for lights 2
 #define PCA_PAYLOAD_SERVO_CH    0    // servo-role channel for payload-release servo
 
-// Default channel role map. Example: 0-7 servos, 8-15 payload switches.
+// ⚠ DEAD -- no consumer anywhere in src/ or include/. The real defaults come from
+// the param table row `(c < 8) ? 1.0f : 2.0f` in params.cpp buildTable(). Kept only
+// because it documents the intended shipping layout; do NOT edit it expecting an
+// effect, and do not treat it as a description of the harness.
 #define PCA_CH_ROLE_INIT { PCA_SERVO,  PCA_SERVO,  PCA_SERVO,  PCA_SERVO,  \
                            PCA_SERVO,  PCA_SERVO,  PCA_SERVO,  PCA_SERVO,  \
                            PCA_SWITCH, PCA_SWITCH, PCA_SWITCH, PCA_SWITCH, \
                            PCA_SWITCH, PCA_SWITCH, PCA_SWITCH, PCA_SWITCH }
+
+// -----------------------------------------------------------------------------
+// SERVOn_FUNCTION — WHAT is wired to a channel (identity), as opposed to
+// SERVOn_ROLE which is HOW the board drives it (electrical behaviour).
+//
+// The two are orthogonal and the distinction is load-bearing:
+//   ROLE     decides whether a channel can be actuated at all, and the firmware
+//            enforces it (task_ui_status.cpp, mav_commands.cpp DO_SET_SERVO).
+//   FUNCTION decides what a companion/GCS CALLS it. The firmware deliberately
+//            does NOT read servo_func -- it is storage, served by the ordinary
+//            param protocol, for duburi_ws to read and Bondor to write.
+// Setting a FUNCTION never makes a channel fireable; only ROLE=PCA_SWITCH does.
+//
+// WHY THIS LIVES ON THE BOARD. The alternative is a host-side table mapping
+// channel -> device, which goes stale silently the moment someone re-wires or
+// re-roles a channel -- and the failure mode of a stale payload map is firing the
+// manipulator arm during a drop. Stored here, the identity travels with the hull.
+//
+// ⚠ APPEND-ONLY, for the same reason movement::Type is: these numbers are mirrored
+// by hand in duburi_ws (fc/srot_protocol.py) and Bondor (src/shared/protocol.ts).
+// Inserting a value silently renames every payload after it. 0 must stay NONE so an
+// unconfigured board (param default 0.0f) reads "unassigned" rather than a device.
+#define SROT_SERVO_FUNC_NONE      0   // unassigned / not a payload
+#define SROT_SERVO_FUNC_TORPEDO   1   // spring or solenoid launcher
+#define SROT_SERVO_FUNC_DROPPER   2   // marker dropper
+#define SROT_SERVO_FUNC_GRIPPER   3   // manipulator / claw
+#define SROT_SERVO_FUNC_LIGHT     4   // lamp
+#define SROT_SERVO_FUNC_CAMERA    5   // camera tilt / trigger
+#define SROT_SERVO_FUNC_AUX       6   // anything else the operator wants named
+#define SROT_SERVO_FUNC_MAX       6   // highest defined value; bump when appending
 
 // -----------------------------------------------------------------------------
 // SECTION 6 — FREERTOS TASK ALLOCATION

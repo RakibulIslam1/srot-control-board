@@ -21,6 +21,11 @@ reboot. Wire type is REAL32 for all params.
 
 Legend: **[R]** real · **[i]** informational/inert (defined, not read by the control loop).
 
+> **[i] means inert *to this firmware*, not unused.** `SERVOn_FUNCTION` is `[i]` and is
+> nonetheless the payload map duburi_ws reads and Bondor writes. Treating `[i]` as
+> "safe to change, nothing depends on it" is wrong for any param an external consumer
+> has been told to read.
+
 ---
 
 ## ⚠ Flashing this build: erase once, then restore
@@ -316,7 +321,7 @@ Five params per channel `n`:
 | `SERVOn_ROLE` **[R]** | 1 (ch 1-8) / 2 (ch 9-16) | **0 = off, 1 = PWM servo, 2 = MOSFET/switch.** The authoritative role selector. |
 | `SERVOn_MIN` / `SERVOn_MAX` **[R]** | 1100 / 1900 µs | Servo output clamp. |
 | `SERVOn_TRIM` **[R]** | 1500 µs | Servo output when uncommanded. |
-| `SERVOn_FUNCTION` **[i]** | 0 | ArduSub-facing; **not read by SROT** (the role is `SERVOn_ROLE`). QGC Servo-page cosmetic. |
+| `SERVOn_FUNCTION` **[i]** | 0 | **What is wired to the channel** (identity). Still `[i]` -- the firmware does not read it -- but it is NOT cosmetic: **duburi_ws reads it and Bondor writes it** as the payload map, so a wrong value mislabels a payload. Enum `SROT_SERVO_FUNC_*` in `include/config.h`, append-only. Identity only: it never makes a channel fireable, `SERVOn_ROLE=2` does. |
 
 ### Calibration backup — `CAL_*` (26 params)
 
@@ -354,7 +359,9 @@ They behave differently from every other parameter, deliberately:
 Documented so they aren't mistaken for tuning knobs:
 - `FRAME_CONFIG` (=2) — informational; the mixer matrix is fixed vectored-6DOF.
 - `MOT_PWM_TYPE` / `MOT_PWM_MIN` / `MOT_PWM_MAX` — informational; output is fixed DShot150.
-- `SERVOn_FUNCTION` (all 16) — ArduSub-facing; role comes from `SERVOn_ROLE`.
+- `SERVOn_FUNCTION` (all 16) — payload IDENTITY, read by duburi_ws / set in Bondor
+  (`SROT_SERVO_FUNC_*`, `include/config.h`). Electrical behaviour still comes from
+  `SERVOn_ROLE`; the two are orthogonal.
 - `SYS_PARAM_VER` — reports the build's `PARAM_DEFAULTS_VER`. Forced every boot and read by
   nothing; it exists to stamp exported files. Writing it does nothing, and Import skips it.
 
