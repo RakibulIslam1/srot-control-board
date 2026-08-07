@@ -4,6 +4,7 @@
 
 #include "control/autotune.h"
 #include "control/attitude_control.h"
+#include "control/depth_control.h"   // hold depth through the rate/angle phases
 #include "comms/params.h"
 #include "comms/ui_log.h"
 #include "comms/mav_stream.h"       // queueStatusText (Core-1 safe)
@@ -81,6 +82,16 @@ static const float    PERIOD_CONSENSUS = 0.60f;  // and at least 60% of halves m
 // band is chatter: it satisfies the crossing count while carrying no information, and
 // because Ku = 4A/(pi*a) a tiny `a` is exactly what produces an enormous gain.
 static const float    AMP_MARGIN = 2.0f;
+// ...and a CEILING, which was missing entirely. AMP_MARGIN catches "no excitation"; nothing
+// caught "far too much", so a hull thrashing with a thruster out of the water was converted
+// into confident gains. The 2026-08-07 run measured a RollRate amplitude of 1.56 rad/s --
+// 89 deg/s -- which is not a limit cycle any submarine produces; and because
+// Ki = Kp/(0.5*Tu), the short period that ventilation creates inflated the integral term to
+// 33x its default on yaw. Rejecting is right: a tune that cannot be measured must not be
+// guessed. Per family, matching H_RATE / H_ANG / H_DEPTH.
+static const float    AMP_MAX_RATE  = 0.6f;    // rad/s   (~34 deg/s)
+static const float    AMP_MAX_ANG   = 0.5f;    // rad     (~29 deg)
+static const float    AMP_MAX_DEPTH = 0.5f;    // m
 
 static const char* PHASE_NAME[] = {
     "Tune rate roll", "Tune rate pitch", "Tune rate yaw",
@@ -131,15 +142,22 @@ static float wrapPi(float e) {
 }
 
 static bool s_depth_ok = false;   // depth phase runs only with a live depth sensor
+// Depth held through the rate/angle phases so the hull cannot surface mid-measurement.
+static bool  s_hold_captured = false;
+static float s_hold_depth    = 0.0f;
 
 void start(bool depth_ok) {
     s_phase = P_RATE_ROLL;
     s_need_init = true;
     s_depth_ok = depth_ok;
     s_fail_n = 0;
+    s_hold_captured = false;   // re-capture the hold depth on the next update()
     if (!depth_ok) {
         mav_stream::queueStatusText(MAV_SEVERITY_WARNING,
                                     "Autotune: no depth sensor - skipping depth phase");
+    } else {
+        mav_stream::queueStatusText(MAV_SEVERITY_INFO,
+                                    "Autotune: holding depth during attitude phases");
     }
 }
 
@@ -164,7 +182,15 @@ static void applyGains(int phase, float Ku, float Tu) {
     float Kd = Kp * (Tu / 3.0f);
     // Clamp against THIS loop family's envelope, not one global set — see LIMITS.
     const GainLimit& L = LIMITS[phase];
-    bool clipped = (Kp > L.kp) || (Ki > L.ki) || (Kd > L.kd);
+    // A limit of 0 means "this family does not use this term", not "clip it and warn".
+    // The angle loops are P-only (LIMITS ki = kd = 0) while Ziegler-Nichols always computes a
+    // non-zero Ki, so `Ki > L.ki` was ALWAYS true and every angle phase reported CLAMP by
+    // construction -- which is why RollAng/PitchAng/YawAng all showed it with I=0 D=0 on
+    // 2026-08-07. A warning that fires every time carries no information and buries the
+    // clamps that matter.
+    bool clipped = (L.kp > 0 && Kp > L.kp)
+                || (L.ki > 0 && Ki > L.ki)
+                || (L.kd > 0 && Kd > L.kd);
     Kp = constrain(Kp, 0.0f, L.kp);
     Ki = constrain(Ki, 0.0f, L.ki);
     Kd = constrain(Kd, 0.0f, L.kd);
@@ -255,6 +281,9 @@ static float medianHalfMs() {
 static bool measurementIsValid(float hyst, const char** why) {
     if (s_period_n < MIN_PERIODS) { *why = "no limit cycle"; return false; }
     if (s_amp < hyst * AMP_MARGIN) { *why = "amplitude too small"; return false; }
+    const float amp_max = (s_phase <= P_RATE_YAW) ? AMP_MAX_RATE
+                        : (s_phase <= P_ANG_YAW)  ? AMP_MAX_ANG : AMP_MAX_DEPTH;
+    if (s_amp > amp_max) { *why = "amplitude too large"; return false; }
 
     s_med_half_ms = medianHalfMs();
     if (s_med_half_ms <= 0.0f) { *why = "no usable period"; return false; }
@@ -363,6 +392,23 @@ bool update(float roll, float pitch, float yaw,
 
     if (s_need_init) { initPhase(roll, pitch, yaw, depth, now); s_need_init = false; }
 
+    // Capture a depth to hold for the whole run, once, on the first phase.
+    //
+    // Without this the vehicle floats up while roll/pitch/yaw are being excited: out_thr was
+    // left at 0 outside the depth phase, so nothing opposed buoyancy. On a neutrally buoyant
+    // hull that surfaces it, thrusters on one side leave the water, and the relay then
+    // measures a ventilating wallow instead of a limit cycle. That is exactly what produced
+    // the 2026-08-07 tune (RollRate amplitude 1.56 rad/s ~ 89 deg/s, yaw I 33x its default).
+    //
+    // Holding depth cannot be left to the operator: the hull will not hold station by itself
+    // while the depth PID is the thing being fixed, and pinning it by hand would make the
+    // relay measure the restraint rather than the vehicle.
+    if (!s_hold_captured && s_depth_ok) {
+        s_hold_depth = depth;
+        depth::reset(depth);
+        s_hold_captured = true;
+    }
+
     switch (s_phase) {
         // ---- Inner rate loops: relay torque on the axis rate ----
         case P_RATE_ROLL:
@@ -412,6 +458,17 @@ bool update(float roll, float pitch, float yaw,
         }
         default:
             return false;
+    }
+
+    // Hold the captured depth through every phase EXCEPT the depth phase, which must be free
+    // to excite heave -- holding it there would fight the very relay being measured.
+    //
+    // Deliberately gated on s_depth_ok: with no usable depth signal this stays 0, i.e. today's
+    // behaviour, rather than driving heave open-loop on a reading we do not trust. That is the
+    // same reasoning the depth phase already uses to skip itself.
+    if (s_phase != P_DEPTH && s_depth_ok && s_hold_captured) {
+        float tgt = s_hold_depth;
+        out_thr = depth::update(0.0f, depth, dt, tgt);
     }
     return (s_phase < P_DONE);
 }
