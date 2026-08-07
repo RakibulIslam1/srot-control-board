@@ -591,6 +591,48 @@ our error, not a board fault.
    `if` that never reaches `mixer::mix()`, so the flip is not applied to the detect pulse —
    which is correct, since the routine measures whether one thruster agrees with its mixer
    column, a question the whole-frame flip does not affect. No change wanted here.
-4. **`MAGACC = 1`** — heading is absolute from rev 4, so absolute `MOVE_TURN` rides the
-   compass. Calibrate, or we restrict ourselves to relative turns.
+4. **Mag calibration — threshold corrected, and the gate is NOT closed.** We wrote
+   "`MAGACC = 1`" here; the firmware needs **`>= 2`** (`yaw_ref.cpp:185`,
+   `need_acc = have_our_cal ? 0 : 2`). The board reads **`MAGACC 2`** with
+   `MAG_YAW_REF = 1`, so the accuracy gate is satisfied — but see §8.8: we cannot
+   observe whether `yaw_ref` actually **LOCKED**, and accuracy alone does not prove it.
 5. **`FS_GCS_COMPID` back to 191** and saved — ours to do, §8.4.
+
+
+---
+
+## §8.8 — `yaw_ref`'s state is invisible to us, so we cannot gate an absolute turn
+
+Found while verifying §8.7.4 over USB. **Same shape as §8.1: the board knows something
+safety-relevant and does not say it.**
+
+`yaw_ref::State` has `LOCKED` and `REFUSED_CAL` (`yaw_ref.h:38-42`), and the difference is
+load-bearing for us: if the reference never locked, `ATTITUDE.yaw` is **relative to wherever
+the BNO booted** rather than a magnetic heading, and our absolute `MOVE_TURN` (p4=1) then
+turns to a number that means nothing. **There is no `sendNamed` for that state** — the only
+mag-related telemetry is `MAGACC` (`mav_stream.cpp:771`).
+
+`MAGACC` is not a usable proxy, and your own comment is why. `yaw_ref.cpp:179-182`:
+
+> *"What protects the alignment is unchanged and does not depend on the sensor's opinion of
+> itself: `|B|` must be in band, and the sampled headings must agree to within
+> `MAX_SPREAD_RAD` over at least `MIN_SPAN_MS`."*
+
+Both of those can fail with `MAGACC = 3`. And with a stored calibration `need_acc` drops to
+`0`, so accuracy stops correlating with the outcome at all. So a companion reading
+`MAGACC 2` — which is exactly what we read today — still cannot tell a locked reference from
+a refused one.
+
+**Ask: publish the state as a `NAMED_VALUE_FLOAT`**, e.g. `YAWREF` with the enum value
+(0=IDLE, 1=SAMPLING, 2=LOCKED, 3=REFUSED_CAL). One line beside `MAGACC`. That lets us do the
+right thing automatically: allow absolute `turn` when LOCKED, fall back to relative turns
+when not, and say why in the preflight instead of asking an operator to remember.
+
+**Until it exists we will treat absolute `MOVE_TURN` as ungated and prefer relative turns**,
+which costs us accuracy on the RoboSub headings we care about — so this one has a direct
+competition cost, unlike most observability asks.
+
+*(Both §8.1 and §8.8 are the same request in different clothes: on an architecture where you
+own every control loop, the companion cannot verify a loop it cannot see. We are not asking
+for more telemetry in general — only for the two flags that decide whether a command we are
+about to send means what we think it means.)*
