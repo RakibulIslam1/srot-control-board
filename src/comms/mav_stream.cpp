@@ -683,7 +683,60 @@ int32_t getMessageInterval(uint32_t msgid) {
     return 0;   // unknown -> "default", per the MAVLink convention
 }
 
+// CONFIG BANNER — announce the stored config that changes how the vehicle MOVES.
+//
+// Asked for by duburi_ws (Round 8 §8.3/§8.4) after a real near-miss: FRAME_REVERSE lives in
+// NVS, so SROT_FW_BEHAVIOUR_REV cannot describe it. Five commits shipped inside one 6->7 bump
+// and their drift suite passed clean -- correctly, since it reads headers and no constant
+// moved -- while the meaning of every axis command on that hull had changed. A monotonic
+// integer describes COMPILED behaviour; on an architecture where we own every control loop,
+// CONFIGURATION IS BEHAVIOUR, and it has to be visible to whoever is deciding whether to arm.
+//
+// Repeated, not boot-only. A boot-only line is missed by every GCS that connects after the
+// board powers up, which is the normal case. The INFO line stops after a few repeats so a
+// correctly configured vehicle goes quiet; the WARNING repeats for as long as the failsafe
+// is actually widened, because a widened safety margin should stay noisy.
+static void configBanner(uint32_t now) {
+    static uint32_t t_last  = 0;
+    static uint8_t  info_n  = 0;
+    const uint32_t  PERIOD_MS = 60000;
+
+    if (t_last != 0 && (now - t_last) < PERIOD_MS) return;
+    t_last = now;
+
+    const bool wildcard = (g_params.fs_gcs_enable > 0.5f) &&
+                          ((int)lroundf(g_params.fs_gcs_compid) == 0);
+
+    if (info_n < 3) {
+        info_n++;
+        char buf[90];
+        int8_t d[NUM_THRUSTERS];
+        { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(2));
+          for (int i = 0; i < NUM_THRUSTERS; ++i)
+              d[i] = lk.ok() ? g_state.cal.motor_dir[i] : 1; }
+        snprintf(buf, sizeof(buf),
+                 "CFG rev%d FRAME_REVERSE=%d MOT_DIR=%d,%d,%d,%d,%d,%d,%d,%d",
+                 SROT_FW_BEHAVIOUR_REV,
+                 g_params.frame_reverse > 0.5f ? 1 : 0,
+                 (int)lroundf(g_params.mot_dir[0]) * d[0], (int)lroundf(g_params.mot_dir[1]) * d[1],
+                 (int)lroundf(g_params.mot_dir[2]) * d[2], (int)lroundf(g_params.mot_dir[3]) * d[3],
+                 (int)lroundf(g_params.mot_dir[4]) * d[4], (int)lroundf(g_params.mot_dir[5]) * d[5],
+                 (int)lroundf(g_params.mot_dir[6]) * d[6], (int)lroundf(g_params.mot_dir[7]) * d[7]);
+        queueStatusText(MAV_SEVERITY_INFO, buf);
+    }
+
+    // A bench affordance that became permanent is the failure this catches: with COMPID = 0
+    // any station satisfies companionLost(), so in water a dead Jetson is indistinguishable
+    // from a live GCS and the vehicle station-keeps instead of surfacing.
+    if (wildcard) {
+        queueStatusText(MAV_SEVERITY_WARNING,
+                        "FS_GCS_COMPID=0 (wildcard) - ANY station feeds the companion "
+                        "failsafe. Set 191 before diving.");
+    }
+}
+
 void update(uint32_t now) {
+    configBanner(now);
     static uint32_t t_hb = 0, t_sys = 0, t_att = 0, t_imu = 0,
                     t_prs = 0, t_hud = 0, t_bat = 0, t_pwr = 0, t_nvf = 0, t_diag = 0, t_esc = 0;
     // Live intervals. HEARTBEAT is deliberately NOT allowed to be disabled: a GCS that turned
@@ -811,8 +864,23 @@ void update(uint32_t now) {
             // s.depth is POSITIVE-DOWN, so at the surface (~0 m) the demand is negative
             // (descend toward 0.10 m) and rises toward 0 as the vehicle actually gets deeper.
             sendNamed(now, "DEPTH_CMD", depth::preview(s.depth, 0.10f));
-            sendNamed(now, "DEPTH_ERR", depth::lastError());
-            sendNamed(now, "DEPTH_OUT", depth::lastOutput());
+            // DEPTH_ERR / DEPTH_OUT come from the REAL controller, so they are only
+            // meaningful while it is running. Publishing them unconditionally made them a
+            // frozen register whenever it was not: disarmed they held whatever they had when
+            // the loop last executed, streamed at full rate, and looked completely live.
+            //
+            // That is worse than saying nothing. duburi_ws refuses to arm while
+            // |DEPTH_OUT| >= 0.90, so a stale 0.00 passed that guard for the wrong reason --
+            // "settled" and "never ran" were indistinguishable. Absence fails it closed.
+            //
+            // Deliberately NOT fixed by running the loop while disarmed: a depth controller
+            // integrating against a stationary hull on the bench is a worse answer than a
+            // gap. DEPTH_CMD above is unaffected -- it is a preview() computed on demand and
+            // is genuinely live at all times.
+            if (depth::outputFresh()) {
+                sendNamed(now, "DEPTH_ERR", depth::lastError());
+                sendNamed(now, "DEPTH_OUT", depth::lastOutput());
+            }
         }
         // MIXER SIGN, previewed with NOTHING SPINNING.
         //

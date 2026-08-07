@@ -40,6 +40,12 @@ float preview(float meas_depth, float tgt);
 float lastError();
 float lastOutput();
 
+// True only while lastError()/lastOutput() describe a controller that is ACTUALLY RUNNING.
+// False when disarmed, when armed in a mode that does not use the depth loop, and after a
+// reset() until the loop runs again. Callers MUST gate on this before publishing or acting
+// on those two values -- they are otherwise a frozen register that looks live.
+bool outputFresh();
+
 // Remove `amount` of accumulated integrator (never past zero, never sign-flipping).
 // The CoB auto-trim calls this after transferring that effort into its own feedforward
 // trim, so the effort is HANDED OVER rather than duplicated.

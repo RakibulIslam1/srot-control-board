@@ -14,10 +14,21 @@ static const float STICK_DEADBAND = 0.05f;
 // Last error/output of the REAL controller, for telemetry. Lets the water test confirm the
 // armed loop matches what preview() showed on the bench.
 static float s_last_err = 0, s_last_out = 0;
+// When update() last actually executed. Without this, s_last_err/s_last_out are a FROZEN
+// REGISTER whenever the controller is not running -- disarmed, or armed in a mode that does
+// not use the depth loop -- while still being published at full rate. A consumer cannot tell
+// "the loop settled at zero" from "the loop has never run", and duburi_ws gates arming on
+// exactly that distinction (it refuses to arm while |DEPTH_OUT| >= 0.90). A stale value is
+// strictly worse than an absent one: absence fails their guard closed, staleness passes it
+// for the wrong reason. 0 = never run.
+static uint32_t s_last_run_ms = 0;
 
 void reset(float current_depth) {
     s_target = current_depth;
     s_pid.reset();
+    // A reset controller has no valid error/output until it runs again. Clearing this stops
+    // the pre-reset values from being reported as if they described the new state.
+    s_last_run_ms = 0;
 }
 
 void setTarget(float depth_m) { s_target = depth_m; }
@@ -73,6 +84,7 @@ float update(float stick_throttle, float meas_depth, float dt, float& target_out
     const float out = s_pid.update(-s_target, -meas_depth, dt);
     s_last_err  = (-s_target) - (-meas_depth);   // == meas_depth - s_target
     s_last_out  = out;
+    s_last_run_ms = millis();
     return out;
 }
 
@@ -116,5 +128,10 @@ float preview(float meas_depth, float tgt) {
 
 float lastError()  { return s_last_err; }
 float lastOutput() { return s_last_out; }
+
+bool outputFresh() {
+    if (s_last_run_ms == 0) return false;                 // never run since boot/reset
+    return (millis() - s_last_run_ms) <= DEPTH_OUT_FRESH_MS;
+}
 
 }  // namespace depth
