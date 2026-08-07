@@ -761,7 +761,12 @@
 // Also: MOTOR_DETECT decides on the projection of the gyro onto the expected angular
 // direction instead of one "dominant" axis (which was degenerate for M5-M8 and produced a
 // wrong vertical result), and it now ends DISARMED in MANUAL instead of armed in STABILIZE.
-#define SROT_FW_BEHAVIOUR_REV   10
+// Rev 11: autotune's limit-cycle validity test is now median + consensus instead of
+// min-vs-max, which are the two most outlier-prone values in the sample -- ONE spurious
+// crossing used to veto an otherwise clean phase, which is what aborted RollRate in water.
+// Sub-physical half-cycles are rejected before sampling, PHASE_TIMEOUT 8 s -> 20 s, and every
+// phase now reports n / amplitude / Tu / consensus% (also live as AT_*).
+#define SROT_FW_BEHAVIOUR_REV   11
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
