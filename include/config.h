@@ -729,7 +729,7 @@
 //      eight thrusters to +1, reported SUCCESS and was persisted to flash. It now leaves
 //      the stored value untouched and finishes FAIL, which also keeps persist_pending
 //      clear so a failed detect can never reach flash. Reported by duburi_ws.
-#define SROT_FW_BEHAVIOUR_REV   6
+#define SROT_FW_BEHAVIOUR_REV   7
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.

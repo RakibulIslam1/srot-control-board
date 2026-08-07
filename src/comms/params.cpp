@@ -685,6 +685,10 @@ bool saveAll() {
 // reported this ("<NAME> set but NOT saved"); the bulk path had no equivalent.
 static volatile bool s_save_req = false;
 void requestSaveAll() { s_save_req = true; }
+// Lets the caller tell "saved OK" from "nothing was pending" -- serviceSaveAll()
+// returns true for both, so on its own it cannot confirm a write actually happened.
+// The GCS Save button needs that distinction to acknowledge honestly.
+bool saveAllPending() { return s_save_req; }
 bool serviceSaveAll() {
     if (!s_save_req) return true;
     s_save_req = false;
