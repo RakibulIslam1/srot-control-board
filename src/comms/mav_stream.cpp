@@ -457,10 +457,24 @@ static void updateCalReports(uint32_t now) {
                 // Show what it decided, so the result is visible without digging through
                 // NVS. NOTE: these multiply with the MOT_n_DIRECTION params — don't also
                 // flip a param for a motor that detect already reversed.
-                char b[64] = "MotorDetect:";
+                // Print DETECTED and EFFECTIVE. Printing only the detected value is how the
+                // 2026-08-07 confusion happened: the log showed "+ + + + - - - -" while
+                // Bondor's Setup tab showed MOT_n_DIRECTION unchanged, and the operator
+                // reasonably read that as the log not being applied. Both were truthful --
+                // detect writes CAL_MDIR and never touches the param -- but the two MULTIPLY,
+                // and neither display showed the product that actually reaches the mixer.
+                char b[96] = "MotorDetect:";
                 for (int i = 0; i < NUM_THRUSTERS; ++i) {
                     char t[6];
                     snprintf(t, sizeof(t), " %c", mdir[i] < 0 ? '-' : '+');
+                    strncat(b, t, sizeof(b) - strlen(b) - 1);
+                }
+                strncat(b, " | eff:", sizeof(b) - strlen(b) - 1);
+                for (int i = 0; i < NUM_THRUSTERS; ++i) {
+                    const int8_t pdir = (g_params.mot_dir[i] < 0) ? -1 : 1;
+                    const int8_t eff  = (int8_t)(mdir[i] * pdir);
+                    char t[6];
+                    snprintf(t, sizeof(t), " %c", eff < 0 ? '-' : '+');
                     strncat(b, t, sizeof(b) - strlen(b) - 1);
                 }
                 sendStatusText(MAV_SEVERITY_INFO, b);

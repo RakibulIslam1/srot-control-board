@@ -272,7 +272,30 @@ bool poll(Sample& out) {
                 quatToEuler(out.qw, out.qx, out.qy, out.qz,
                             out.roll, out.pitch, out.yaw);
 #if BNO_SWAP_ROLL_PITCH
+                // Swap roll/pitch, then NEGATE YAW. The negation is not cosmetic and must
+                // not be dropped: exchanging two axes of a right-handed frame is a
+                // REFLECTION (determinant -1), not a rotation, and it leaves the frame
+                // LEFT-handed. Roll and pitch survive that -- they are merely exchanged,
+                // which is why they read correctly and why a roll/pitch bench check passes.
+                // Yaw does not: a rotation from +x toward +y is positive yaw before the swap
+                // and negative after it, so the yaw SENSE silently inverts while its numeric
+                // value looks fine.
+                //
+                // MEASURED IN WATER 2026-08-07: turning the vehicle right made the reported
+                // yaw DECREASE. Open-loop MANUAL yaw felt correct, so the fault hid there;
+                // STABILIZE and DEPTH_HOLD close the yaw loop, drove the error the wrong way
+                // and span the hull. Roll and pitch closed fine throughout -- the yaw-only
+                // signature is exactly what an improper transform produces.
+                //
+                // Negating z restores a proper rotation: (det -1) x (det -1) = +1, i.e.
+                // (x,y,z) -> (y,x,-z) is a genuine 180 deg rotation about the x=y axis.
                 { float t = out.roll; out.roll = out.pitch; out.pitch = t; }
+                out.yaw = -out.yaw;
+                // quatToEuler already returns (-PI, PI]; negation keeps it in range except
+                // for exactly -PI, which would land on +PI. Re-wrap so downstream 0..360
+                // conversion and yaw_ref's wrapPi never see an out-of-range value.
+                while (out.yaw >  (float)M_PI) out.yaw -= 2.0f * (float)M_PI;
+                while (out.yaw < -(float)M_PI) out.yaw += 2.0f * (float)M_PI;
 #endif
                 // Accel accuracy is taken from the rotation-vector status now that
                 // the raw ACCELEROMETER report is disabled.
@@ -287,14 +310,19 @@ bool poll(Sample& out) {
                 break;
             case SH2_GYROSCOPE_CALIBRATED:
 #if BNO_SWAP_ROLL_PITCH
-                // Swap roll/pitch rates to match the swapped angle axes.
+                // Swap roll/pitch rates to match the swapped angle axes, and negate the yaw
+                // RATE for the same handedness reason as the yaw ANGLE above. These two must
+                // stay in step: the rate PID and the heading hold both feed the same mixer
+                // yaw column, so negating one without the other trades a spin for a fight
+                // between the inner and outer loop.
                 out.gyro_x = s_val.un.gyroscope.y;
                 out.gyro_y = s_val.un.gyroscope.x;
+                out.gyro_z = -s_val.un.gyroscope.z;
 #else
                 out.gyro_x = s_val.un.gyroscope.x;
                 out.gyro_y = s_val.un.gyroscope.y;
-#endif
                 out.gyro_z = s_val.un.gyroscope.z;
+#endif
                 out.gyro_accuracy = s_val.status & 0x03;
                 break;
             case SH2_MAGNETIC_FIELD_CALIBRATED:
