@@ -773,6 +773,20 @@ void update(uint32_t now) {
         // depth_ok) because its whole job is to explain WHY depth just withdrew -- gating it
         // on the health it reports on would hide it exactly when it matters.
         sendNamed(now, "BARO_P2P", bar30::jitterP2P());
+        // COMP_SEEN: has the CONFIGURED companion (FS_GCS_SYSID/COMPID) been heard since
+        // boot? 0 = never, 1 = yes.
+        //
+        // This exists so a GCS can tell which side of the seen-then-lost latch it is on.
+        // companionLost() only arms once the named companion has actually appeared, so a
+        // freshly-booted board with only Bondor connected can arm perfectly safely -- but
+        // Bondor had no way to know that, so it warned on EVERY session and offered to
+        // wildcard the failsafe (bench mode) even when nothing was wrong. A warning that
+        // fires when it does not apply teaches operators to widen a failsafe by reflex.
+        //
+        // With this, the warning and the bench-mode offer can be gated on the one condition
+        // that actually matters: the companion has been seen, so arming Bondor-only really
+        // would trip "companion lost".
+        sendNamed(now, "COMP_SEEN", mav_commands::companionSeen() ? 1.0f : 0.0f);
         // DEPTH LOOP OBSERVABILITY (AUDIT R1). This loop has never run closed, and the
         // documented bench check ("hand-move the vehicle in DEPTH_HOLD") only works in
         // WATER — in air a metre of height is ~1.2 mm of equivalent depth. So the sign was
