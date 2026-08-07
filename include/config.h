@@ -774,7 +774,14 @@
 // the depth phase, so a neutrally buoyant hull surfaced mid-measurement and the relay measured
 // a ventilating wallow), adds an amplitude CEILING to reject that class of measurement outright,
 // and stops reporting a false CLAMP on the P-only angle families.
-#define SROT_FW_BEHAVIOUR_REV   12
+// Rev 13: SROT_MOVE REQUIRES ARMED. The movement state machine never consulted the arm
+// state, so a move sent while disarmed ran its whole profile with the thrusters silent and
+// finished MAV_RESULT_ACCEPTED at 100%. Measured: a 3 m FORWARD "completed" in 3.5 s having
+// moved nothing. Consumers that sequence legs on those ACKs (duburi_ws) would advance an
+// entire mission on a dead hull. Now MAV_RESULT_TEMPORARILY_REJECTED + "arm first".
+//
+// Also adds per-axis ATC_RAT_*_FLTD and the previously absent ATC_RAT_*_FLTT target filter.
+#define SROT_FW_BEHAVIOUR_REV   13
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.

@@ -45,8 +45,12 @@ struct Params {
     // Attitude — inner rate-loop PID (+ integrator limit ATC_RAT_*_IMAX + feedforward
     // ATC_RAT_*_FF for crisp small-command response).
     float rat_rll_p, rat_rll_i, rat_rll_d, rat_rll_imax, rat_rll_ff;
+    // Per-axis filter cutoffs (Hz), mirroring ArduSub's ATC_RAT_*_FLTD / FLTT.
+    float rat_rll_fltd, rat_rll_fltt;
     float rat_pit_p, rat_pit_i, rat_pit_d, rat_pit_imax, rat_pit_ff;
+    float rat_pit_fltd, rat_pit_fltt;
     float rat_yaw_p, rat_yaw_i, rat_yaw_d, rat_yaw_imax, rat_yaw_ff;
+    float rat_yaw_fltd, rat_yaw_fltt;
     // Depth-hold PID
     float depth_p, depth_i, depth_d;
     // Model-based control (Phase 2a): angular drag feedforward, cross-coupling, CoB auto-trim.
