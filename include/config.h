@@ -366,6 +366,12 @@
 #define CONTROL_LOOP_HZ         500
 #define CONTROL_LOOP_DT         (1.0f / (float)CONTROL_LOOP_HZ)
 
+// How recently depth::update() must have run for DEPTH_ERR / DEPTH_OUT to be publishable.
+// The control loop is 500 Hz (2 ms), so 50 ms is ~25 periods -- far enough above scheduling
+// jitter that a running loop never flaps to "stale", and far below any interval a human or
+// a consumer would mistake for live. Disarmed, the gap is seconds and is caught instantly.
+#define DEPTH_OUT_FRESH_MS      50
+
 // Derivative low-pass cutoff (Hz) for every PID (control/pid.h). A raw difference at
 // 500 Hz multiplies gyro noise by 500, which is why D could not be raised during tuning:
 // the term was mostly noise and buzzed the motors long before it damped anything. 20 Hz is
@@ -729,7 +735,14 @@
 //      eight thrusters to +1, reported SUCCESS and was persisted to flash. It now leaves
 //      the stored value untouched and finishes FAIL, which also keeps persist_pending
 //      clear so a failed detect can never reach flash. Reported by duburi_ws.
-#define SROT_FW_BEHAVIOUR_REV   7
+// Rev 8: DEPTH_ERR / DEPTH_OUT are SUPPRESSED when the depth controller is not running,
+// instead of streaming a frozen register. Consumers that gate on them (duburi_ws refuses to
+// arm while |DEPTH_OUT| >= 0.90) must treat absence as "loop not running", not as zero.
+// Also adds the repeating CFG config banner and the FS_GCS_COMPID=0 wildcard warning.
+//
+// Bumped per duburi_ws Round 8 §8.3: bump when a vehicle in service will FEEL the change,
+// even if the code is additive. Suppressing a field is felt.
+#define SROT_FW_BEHAVIOUR_REV   8
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
