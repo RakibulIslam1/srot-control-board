@@ -766,7 +766,11 @@
 // crossing used to veto an otherwise clean phase, which is what aborted RollRate in water.
 // Sub-physical half-cycles are rejected before sampling, PHASE_TIMEOUT 8 s -> 20 s, and every
 // phase now reports n / amplitude / Tu / consensus% (also live as AT_*).
-#define SROT_FW_BEHAVIOUR_REV   11
+// Rev 12: autotune HOLDS DEPTH through the rate/angle phases (out_thr was left at 0 outside
+// the depth phase, so a neutrally buoyant hull surfaced mid-measurement and the relay measured
+// a ventilating wallow), adds an amplitude CEILING to reject that class of measurement outright,
+// and stops reporting a false CLAMP on the P-only angle families.
+#define SROT_FW_BEHAVIOUR_REV   12
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
