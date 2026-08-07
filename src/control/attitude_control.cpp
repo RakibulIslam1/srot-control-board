@@ -42,6 +42,12 @@ static void loadGains() {
     s_rate_roll.setLimits(g_params.rat_rll_imax  > 0 ? g_params.rat_rll_imax  : 0.5f, 1.0f);
     s_rate_pitch.setLimits(g_params.rat_pit_imax > 0 ? g_params.rat_pit_imax : 0.5f, 1.0f);
     s_rate_yaw.setLimits(g_params.rat_yaw_imax   > 0 ? g_params.rat_yaw_imax   : 0.5f, 1.0f);
+    // Per-axis derivative and TARGET filtering. The target filter is new: without it a
+    // stepped setpoint went straight into the proportional term, so every stick movement
+    // and every controller handover arrived as a step the thrusters answered instantly.
+    s_rate_roll.setFilters(g_params.rat_rll_fltd,  g_params.rat_rll_fltt);
+    s_rate_pitch.setFilters(g_params.rat_pit_fltd, g_params.rat_pit_fltt);
+    s_rate_yaw.setFilters(g_params.rat_yaw_fltd,   g_params.rat_yaw_fltt);
 }
 
 void reset() {

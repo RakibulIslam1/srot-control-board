@@ -325,6 +325,27 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
             //   Braking is on-board. See docs/JETSON_COMMS.md.  (wire type + 1 = movement::Type)
             int wire = (int)p[0];
             if (wire < 0 || wire > 9) return MAV_RESULT_DENIED;
+            {
+                // MUST BE ARMED. The movement state machine advances on its own profile and
+                // does not consult the arm state, so a move commanded while disarmed runs the
+                // full leg with the thrusters silent, reports progress 10..90 and finishes
+                // MAV_RESULT_ACCEPTED at 100%. MEASURED 2026-08-07: a 3 m FORWARD "completed"
+                // in 3.5 s, disarmed, having moved nothing.
+                //
+                // That is a command reporting success for work it never did -- the same class
+                // of fault as the stale DEPTH_OUT (rev 9) and the false CLAMP (rev 12), and
+                // the worst one yet, because duburi_ws sequences mission legs back-to-back on
+                // these completions and would advance through an entire mission on a dead hull.
+                //
+                // Refuse it the way MOTOR_DETECT already refuses (task_control_loop.cpp:382).
+                StateLock alk(g_state.mtx_control, pdMS_TO_TICKS(5));
+                const bool armed = alk.ok() ? g_state.control.armed : false;
+                if (!armed) {
+                    mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                               "SROT_MOVE refused: arm first");
+                    return MAV_RESULT_TEMPORARILY_REJECTED;
+                }
+            }
             StateLock lk(g_state.mtx_control);
             if (!lk.ok()) return MAV_RESULT_TEMPORARILY_REJECTED;
             auto& c = g_state.control;

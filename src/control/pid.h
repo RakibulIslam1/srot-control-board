@@ -36,6 +36,14 @@ class PID {
 public:
     void setGains(float kp, float ki, float kd) { _kp = kp; _ki = ki; _kd = kd; }
     void setLimits(float imax, float outmax)    { _imax = imax; _outmax = outmax; }
+    // Per-instance filter cutoffs, Hz. 0 disables that filter.
+    //   fltd = DERIVATIVE filter, was the single compile-time PID_D_FILT_HZ for every axis.
+    //          ArduSub runs 30 Hz on roll/pitch but only 5 Hz on yaw -- one global value
+    //          cannot express that, and yaw is the axis with the least useful signal.
+    //   fltt = TARGET filter (ArduSub FLTT). We had none: a stepped setpoint went straight
+    //          into the proportional term, so every stick movement and every controller
+    //          handover arrived as a step the thrusters had to answer instantly.
+    void setFilters(float fltd_hz, float fltt_hz) { _fltd = fltd_hz; _fltt = fltt_hz; }
 
     // One step. Derivative is taken on the measurement (no setpoint-kick).
     float update(float setpoint, float measurement, float dt) {
@@ -47,6 +55,16 @@ public:
         if (!isfinite(_integ)) _integ = 0.0f;
         if (!isfinite(_deriv)) _deriv = 0.0f;
 
+        // --- target (setpoint) low-pass, ArduSub FLTT -------------------------
+        if (_fltt > 0.0f) {
+            const float rc_t = 1.0f / (2.0f * (float)M_PI * _fltt);
+            const float a_t  = constrain(dt / (dt + rc_t), 0.0f, 1.0f);
+            _sp_f = _first ? setpoint : (_sp_f + a_t * (setpoint - _sp_f));
+        } else {
+            _sp_f = setpoint;
+        }
+        setpoint = _sp_f;
+
         const float err = setpoint - measurement;
 
         // --- filtered derivative-on-measurement -------------------------------
@@ -54,7 +72,9 @@ public:
         if (!_first) d_raw = -(measurement - _prev_meas) / dt;
         _prev_meas = measurement;
 
-        const float fc = (PID_D_FILT_HZ > 0.0f) ? (float)PID_D_FILT_HZ : 0.0f;
+        // Per-instance cutoff when set, else the compile-time default (back-compat).
+        const float fc = (_fltd >= 0.0f) ? _fltd
+                       : ((PID_D_FILT_HZ > 0.0f) ? (float)PID_D_FILT_HZ : 0.0f);
         if (fc > 0.0f) {
             // Single-pole RC low-pass: a = dt / (dt + 1/(2*pi*fc)).
             const float rc = 1.0f / (2.0f * (float)M_PI * fc);
@@ -83,7 +103,7 @@ public:
         return constrain(out, -_outmax, _outmax);
     }
 
-    void reset() { _integ = 0; _first = true; _prev_meas = 0; _deriv = 0; }
+    void reset() { _integ = 0; _first = true; _prev_meas = 0; _deriv = 0; _sp_f = 0; }
 
     // Current integrator state (for CoB auto-trim / diagnostics).
     float integral() const { return _integ; }
@@ -102,5 +122,8 @@ private:
     float _kp = 0, _ki = 0, _kd = 0;
     float _imax = 1.0f, _outmax = 1.0f;
     float _integ = 0, _prev_meas = 0, _deriv = 0;
+    float _sp_f  = 0;              // filtered setpoint (FLTT)
+    float _fltd  = -1.0f;          // <0 = use PID_D_FILT_HZ
+    float _fltt  = 0.0f;           // 0 = target filter off
     bool  _first = true;
 };

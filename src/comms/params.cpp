@@ -159,6 +159,16 @@ static const Desc SCALARS[] = {
     { "ATC_RAT_RLL_I",  "ATC_RAT_RLL_I",  &g_params.rat_rll_i,      DEF_RAT_RLL_I },
     { "ATC_RAT_RLL_D",  "ATC_RAT_RLL_D",  &g_params.rat_rll_d,      DEF_RAT_RLL_D },
     { "ATC_RAT_RLL_IMAX", "atc_rll_imax", &g_params.rat_rll_imax,   0.444f },
+    // Filter cutoffs, Hz. Values are the operator's ArduSub 4.5.3 config that flew this
+    // hull: 30 Hz on roll/pitch, 5 Hz on yaw. Yaw is filtered far harder because it is the
+    // noisiest axis with the least useful high-frequency content -- a single global cutoff
+    // (the old compile-time PID_D_FILT_HZ 20) could not express that split.
+    { "ATC_RAT_RLL_FLTD", "atc_rll_fltd", &g_params.rat_rll_fltd,   30.0f },
+    { "ATC_RAT_RLL_FLTT", "atc_rll_fltt", &g_params.rat_rll_fltt,   30.0f },
+    { "ATC_RAT_PIT_FLTD", "atc_pit_fltd", &g_params.rat_pit_fltd,   30.0f },
+    { "ATC_RAT_PIT_FLTT", "atc_pit_fltt", &g_params.rat_pit_fltt,   30.0f },
+    { "ATC_RAT_YAW_FLTD", "atc_yaw_fltd", &g_params.rat_yaw_fltd,    5.0f },
+    { "ATC_RAT_YAW_FLTT", "atc_yaw_fltt", &g_params.rat_yaw_fltt,    5.0f },
     { "ATC_RAT_RLL_FF", "ATC_RAT_RLL_FF", &g_params.rat_rll_ff,     DEF_RAT_RLL_FF },
     { "ATC_RAT_PIT_P",  "ATC_RAT_PIT_P",  &g_params.rat_pit_p,      DEF_RAT_PIT_P },
     { "ATC_RAT_PIT_I",  "ATC_RAT_PIT_I",  &g_params.rat_pit_i,      DEF_RAT_PIT_I },
