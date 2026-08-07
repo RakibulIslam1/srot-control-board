@@ -9,6 +9,7 @@
 #include "control/depth_control.h"   // preview()/lastError() — depth-loop observability
 #include "control/mixer.h"           // mix() is pure — preview the depth chain disarmed
 #include "control/yaw_ref.h"         // state() — is the heading absolute or boot-relative?
+#include "control/autotune.h"        // live limit-cycle measurement (AT_*)
 #include "drivers/bar30.h"           // jitterP2P() — why depth withdrew
 #include "comms/ui_log.h"
 #include "config.h"
@@ -469,15 +470,18 @@ static void updateCalReports(uint32_t now) {
                     snprintf(t, sizeof(t), " %c", mdir[i] < 0 ? '-' : '+');
                     strncat(b, t, sizeof(b) - strlen(b) - 1);
                 }
-                strncat(b, " | eff:", sizeof(b) - strlen(b) - 1);
+                sendStatusText(MAV_SEVERITY_INFO, b);
+                // Effective on its OWN line. Both together exceed the 50-char STATUSTEXT
+                // budget, and a truncated direction list is actively misleading.
+                char e[64] = "MotorDetect eff:";
                 for (int i = 0; i < NUM_THRUSTERS; ++i) {
                     const int8_t pdir = (g_params.mot_dir[i] < 0) ? -1 : 1;
                     const int8_t eff  = (int8_t)(mdir[i] * pdir);
                     char t[6];
                     snprintf(t, sizeof(t), " %c", eff < 0 ? '-' : '+');
-                    strncat(b, t, sizeof(b) - strlen(b) - 1);
+                    strncat(e, t, sizeof(e) - strlen(e) - 1);
                 }
-                sendStatusText(MAV_SEVERITY_INFO, b);
+                sendStatusText(MAV_SEVERITY_INFO, e);
                 break;
             }
             default:
@@ -729,8 +733,11 @@ static void configBanner(uint32_t now) {
         { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(2));
           for (int i = 0; i < NUM_THRUSTERS; ++i)
               d[i] = lk.ok() ? g_state.cal.motor_dir[i] : 1; }
+        // MUST fit 50 chars -- STATUSTEXT.text is char[50]. The rev-9 wording
+        // ("CFG rev10 FRAME_REVERSE=1 MOT_DIR=-1,1,1,1,1,1,1,-1") was 51 and lost its final
+        // digit on the wire, which is worse than a shorter label: a truncated -1 reads as -.
         snprintf(buf, sizeof(buf),
-                 "CFG rev%d FRAME_REVERSE=%d MOT_DIR=%d,%d,%d,%d,%d,%d,%d,%d",
+                 "CFG r%d FR=%d DIR=%d,%d,%d,%d,%d,%d,%d,%d",
                  SROT_FW_BEHAVIOUR_REV,
                  g_params.frame_reverse > 0.5f ? 1 : 0,
                  (int)lroundf(g_params.mot_dir[0]) * d[0], (int)lroundf(g_params.mot_dir[1]) * d[1],
@@ -827,6 +834,15 @@ void update(uint32_t now) {
         if (s.depth_ok) sendNamed(now, "WTEMP", s.wtemp);
         sendNamed(now, "STUNT_PRG", s.stunt_prog);
         sendNamed(now, "ATUNE", s.atune ? 1.0f : 0.0f);
+        // Limit-cycle measurement, live, so an autotune run can be WATCHED instead of only
+        // explained after it aborts. AT_TU and AT_OKPCT read 0 during collection and settle
+        // when the phase ends -- the median is not meaningful half-formed.
+        if (s.atune) {
+            sendNamed(now, "AT_N",     (float)autotune::sampleCount());
+            sendNamed(now, "AT_AMP",   autotune::amplitude());
+            sendNamed(now, "AT_TU",    autotune::periodTu());
+            sendNamed(now, "AT_OKPCT", autotune::consensusPct());
+        }
         sendNamed(now, "KILL", s.kill ? 1.0f : 0.0f);
         sendNamed(now, "CURR", s.curr);
         // Live pilot gain — the gain buttons change this at runtime, so a joystick UI has

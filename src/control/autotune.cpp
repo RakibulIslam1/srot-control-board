@@ -45,17 +45,38 @@ static const GainLimit LIMITS[] = {
     { 10.0f, 2.0f, 0.5f },   // depth       (def 3.0 / 0.5 / 0)
 };
 
-static const uint32_t PHASE_TIMEOUT = 8000;
-// Half-cycles required for a measurement to count. Six half-cycles = three full periods.
-static const int      MIN_PERIODS   = 6;
+// 20 s, not 8. Median statistics need samples, and 8 s with MIN_PERIODS plus two discarded
+// settle crossings demanded a full period of ~1.3 s or shorter. A buoyancy-stiffened hull is
+// slower than that, so the phase ended on timeout holding a small ragged sample -- precisely
+// the condition under which the old min/max spread test was least reliable.
+static const uint32_t PHASE_TIMEOUT = 20000;
+// Half-cycles required for a measurement to count. Eight half-cycles = four full periods.
+static const int      MIN_PERIODS   = 8;
+// Half-cycles shorter than this are gyro chatter, not hull motion, and are DROPPED before
+// they reach the sample. A submarine roll axis does not oscillate at 8 Hz; the gyro noise
+// floor crossing a tight hysteresis band does. Under the old code a single such crossing
+// collapsed s_half_min and vetoed the whole phase however clean the rest of it was.
+static const uint32_t MIN_HALF_MS   = 120;
+// Cap on retained half-periods. Fixed storage -- no allocation on the control core.
+static const int      MAX_HALVES    = 24;
 // Half-cycles discarded before measurement starts. The relay steps to full amplitude the
 // instant a phase opens, so the first excursion is an entry transient, not a limit cycle —
 // it is typically the largest one and it used to set the amplitude for the whole phase.
 static const int      SETTLE_CROSSINGS = 2;
-// A real limit cycle has a consistent period. If the longest measured half-cycle is more
-// than this multiple of the shortest, the signal was drifting or noise-driven, not
-// oscillating, and the numbers derived from it mean nothing.
-static const float    PERIOD_SPREAD_MAX = 3.0f;
+// A real limit cycle has a consistent period, and that is still required -- but it is now
+// judged by CONSENSUS against the median rather than by comparing the two most outlier-prone
+// values in the sample.
+//
+// The old test was `s_half_max > s_half_min * 3`. Those are running extremes, so ONE spurious
+// crossing anywhere in the phase poisoned the result permanently and the measurement was
+// thrown away however clean the other fifteen half-cycles were. That is what aborted RollRate
+// on the 2026-08-07 water test.
+//
+// This is not a loosened bar. A drifting or noise-driven signal fails the consensus test just
+// as firmly, and the median is a better estimator of Tu than the mean it replaces. What
+// changes is that a single outlier can no longer veto a good measurement.
+static const float    PERIOD_TOL      = 0.40f;   // within +-40% of the median counts as agreeing
+static const float    PERIOD_CONSENSUS = 0.60f;  // and at least 60% of halves must agree
 // The amplitude must clear the Schmitt hysteresis by a real margin. Sitting just above the
 // band is chatter: it satisfies the crossing count while carrying no information, and
 // because Ku = 4A/(pi*a) a tiny `a` is exactly what produces an enormous gain.
@@ -90,7 +111,13 @@ static float    s_amp = 0;
 static float    s_period_sum_ms = 0;
 static int      s_period_n = 0;
 static int      s_cross_n = 0;         // total half-cycles seen, incl. the discarded ones
-static float    s_half_min = 0, s_half_max = 0;   // period spread (limit-cycle sanity)
+// Every retained half-period, not just the extremes. Keeping the whole sample is what lets
+// the median and the consensus test see past a single bad crossing.
+static uint32_t s_half_ms[MAX_HALVES];
+static int      s_half_n = 0;
+// Last measurement, kept for the STATUSTEXT report and the AT_* telemetry.
+static float    s_med_half_ms = 0;
+static float    s_ok_frac     = 0;
 static int      s_fail_n = 0;          // phases that produced no usable measurement
 
 // Per-phase reference captured at entry.
@@ -119,7 +146,7 @@ void start(bool depth_ok) {
 static void initPhase(float roll, float pitch, float yaw, float depth, uint32_t now) {
     s_phase_start = now;
     s_sign = 0; s_last_cross = 0; s_amp = 0; s_period_sum_ms = 0; s_period_n = 0;
-    s_cross_n = 0; s_half_min = 0; s_half_max = 0;
+    s_cross_n = 0; s_half_n = 0; s_med_half_ms = 0; s_ok_frac = 0;
     if (s_phase >= 0 && s_phase < N_PHASES) ui_log::set(PHASE_NAME[s_phase]);   // OLED progress
     switch (s_phase) {
         case P_ANG_ROLL:  s_ref = roll;  break;
@@ -182,11 +209,15 @@ static bool measure(float signal, uint32_t now, float hyst) {
     if (newsign != s_sign && s_sign != 0) {          // a half-cycle just completed
         s_cross_n++;
         if (s_last_cross != 0 && s_cross_n > SETTLE_CROSSINGS) {
-            float half = (float)(now - s_last_cross);
-            s_period_sum_ms += half;
-            s_period_n++;
-            if (s_half_min == 0 || half < s_half_min) s_half_min = half;
-            if (half > s_half_max) s_half_max = half;
+            const uint32_t half = now - s_last_cross;
+            // Drop sub-physical crossings entirely -- they are gyro chatter across the
+            // hysteresis band, not hull motion, and they must not reach the sample OR count
+            // toward MIN_PERIODS. Letting one in is what used to veto an otherwise clean phase.
+            if (half >= MIN_HALF_MS) {
+                s_period_sum_ms += (float)half;
+                s_period_n++;
+                if (s_half_n < MAX_HALVES) s_half_ms[s_half_n++] = half;
+            }
         }
         s_last_cross = now;
     }
@@ -205,11 +236,37 @@ static bool measure(float signal, uint32_t now, float hyst) {
 // 500 Hz loop. The mirror case, a fast noise-driven crossing, drives Ki to its clamp instead.
 // Both are reachable on a bench in air, which is where anyone would first try this.
 // Reasons are short by necessity: they share the 50-char STATUSTEXT budget with the tag.
+// Median of the retained half-periods. Insertion sort on <= MAX_HALVES elements, on a copy so
+// the original order stays available. Cheap and allocation-free.
+static float medianHalfMs() {
+    if (s_half_n <= 0) return 0.0f;
+    uint32_t v[MAX_HALVES];
+    for (int i = 0; i < s_half_n; ++i) v[i] = s_half_ms[i];
+    for (int i = 1; i < s_half_n; ++i) {
+        uint32_t k = v[i];
+        int j = i - 1;
+        while (j >= 0 && v[j] > k) { v[j + 1] = v[j]; --j; }
+        v[j + 1] = k;
+    }
+    return (s_half_n & 1) ? (float)v[s_half_n / 2]
+                          : 0.5f * ((float)v[s_half_n / 2 - 1] + (float)v[s_half_n / 2]);
+}
+
 static bool measurementIsValid(float hyst, const char** why) {
     if (s_period_n < MIN_PERIODS) { *why = "no limit cycle"; return false; }
     if (s_amp < hyst * AMP_MARGIN) { *why = "amplitude too small"; return false; }
-    if (s_half_min <= 0.0f) { *why = "no usable period"; return false; }
-    if (s_half_max > s_half_min * PERIOD_SPREAD_MAX) { *why = "period unstable"; return false; }
+
+    s_med_half_ms = medianHalfMs();
+    if (s_med_half_ms <= 0.0f) { *why = "no usable period"; return false; }
+
+    // CONSENSUS, not min-vs-max. Count how many half-cycles agree with the median.
+    int agree = 0;
+    for (int i = 0; i < s_half_n; ++i) {
+        const float d = fabsf((float)s_half_ms[i] - s_med_half_ms) / s_med_half_ms;
+        if (d <= PERIOD_TOL) agree++;
+    }
+    s_ok_frac = (s_half_n > 0) ? (float)agree / (float)s_half_n : 0.0f;
+    if (s_ok_frac < PERIOD_CONSENSUS) { *why = "period unstable"; return false; }
     return true;
 }
 
@@ -221,9 +278,16 @@ static void finishPhase() {
 
     const char* why = nullptr;
     if (measurementIsValid(hyst, &why)) {
-        float half_ms = s_period_sum_ms / s_period_n;
-        float Tu = 2.0f * half_ms / 1000.0f;
+        // Tu from the MEDIAN half-period, not the mean of all of them. The mean is dragged by
+        // the same outliers the consensus test tolerates, and Tu feeds Kd directly.
+        float Tu = 2.0f * s_med_half_ms / 1000.0f;
         float Ku = 4.0f * A / ((float)M_PI * s_amp);
+        // Report the measurement behind the gains, so a suspicious tune can be checked
+        // afterwards instead of being taken on faith.
+        char ok[56];
+        snprintf(ok, sizeof(ok), "%s n%d a%.2f T%.2f ok%d%%", PHASE_TAG[s_phase],
+                 s_half_n, (double)s_amp, (double)Tu, (int)(s_ok_frac * 100.0f + 0.5f));
+        mav_stream::queueStatusText(MAV_SEVERITY_INFO, ok);
         applyGains(s_phase, Ku, Tu);
     } else {
         // Keep the existing gains and SAY SO. A silently-skipped phase used to be
@@ -231,8 +295,18 @@ static void finishPhase() {
         // was "finished". motor_tune already reports both its results and its failures.
         s_fail_n++;
         char b[64];
-        snprintf(b, sizeof(b), "%s FAIL: %s - gains kept", PHASE_TAG[s_phase], why);
+        snprintf(b, sizeof(b), "%s FAIL %s", PHASE_TAG[s_phase], why);
         mav_stream::queueStatusText(MAV_SEVERITY_WARNING, b);
+        // The numbers, on their own line so neither gets truncated at 50 chars. Without these
+        // "period unstable" is unactionable: a small n means the phase timed out, an amplitude
+        // near the hysteresis means the relay is not exciting the axis, and a low ok% means
+        // the motion genuinely is irregular (wave action, or tuning at the surface).
+        char d[56];
+        snprintf(d, sizeof(d), " n%d a%.2f h%.2f T%.2f ok%d%%",
+                 s_half_n, (double)s_amp, (double)hyst,
+                 (double)(2.0f * s_med_half_ms / 1000.0f),
+                 (int)(s_ok_frac * 100.0f + 0.5f));
+        mav_stream::queueStatusText(MAV_SEVERITY_WARNING, d);
 
         // A failed RATE phase ends the whole tune. Every later phase runs on top of the
         // inner loops: the angle phases relay a rate COMMAND through the rate PID, so if
@@ -347,6 +421,14 @@ float progress() {
     if (s_phase >= P_DONE) return 1.0f;
     return (float)s_phase / (float)N_PHASES;
 }
+
+// Live measurement, for the AT_* telemetry. periodTu()/consensusPct() are only meaningful
+// once the phase has ended and measurementIsValid() has run -- they read 0 during collection,
+// which is honest rather than showing a half-formed median as if it were settled.
+int   sampleCount()   { return s_half_n; }
+float amplitude()     { return s_amp; }
+float periodTu()      { return 2.0f * s_med_half_ms / 1000.0f; }
+float consensusPct()  { return s_ok_frac * 100.0f; }
 
 void abort() { s_phase = P_DONE; s_need_init = false; }   // stop now, keep gains tuned so far
 

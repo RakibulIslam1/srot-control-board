@@ -31,6 +31,13 @@ bool update(float roll, float pitch, float yaw,
 // 0..1 across all phases.
 float progress();
 
+// Live limit-cycle measurement, published as AT_N / AT_AMP / AT_TU / AT_OKPCT so a run can be
+// watched from the GCS instead of only explained after it aborts.
+int   sampleCount();     // retained half-cycles this phase
+float amplitude();       // measured limit-cycle amplitude
+float periodTu();        // s, from the MEDIAN half-period (0 until computed)
+float consensusPct();    // % of half-cycles agreeing with the median
+
 // Abort immediately (e.g. safety trip) — stops the sequence without saving further.
 void abort();
 
