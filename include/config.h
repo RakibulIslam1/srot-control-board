@@ -742,7 +742,15 @@
 //
 // Bumped per duburi_ws Round 8 §8.3: bump when a vehicle in service will FEEL the change,
 // even if the code is additive. Suppressing a field is felt.
-#define SROT_FW_BEHAVIOUR_REV   8
+//
+// Rev 9: publishes YAW_REF (yaw_ref::State) so a consumer can tell an ABSOLUTE heading from
+// a boot-relative one and gate absolute MOVE_TURN on it (Round 8 §8.8). MAGACC is not a
+// proxy for this and must not be used as one.
+//
+// Rev 8 is a separate number even though it NEVER REACHED HARDWARE -- duburi_ws already
+// adopted "rev 8" in their docs as the DEPTH_ERR/DEPTH_OUT suppression release, and quietly
+// widening what that number means is the precise failure §8.3 was written about.
+#define SROT_FW_BEHAVIOUR_REV   9
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
