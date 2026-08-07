@@ -592,9 +592,16 @@
 #define DEF_MOVE_YAW_RATE       45.0f       // default turn rate (deg/s)
 
 // Depth-hold PID starting gains
-#define DEF_DEPTH_P             3.0f
-#define DEF_DEPTH_I             0.5f
-#define DEF_DEPTH_D             0.0f
+// Metres -> NORMALISED THROTTLE, in one step. This is NOT ArduSub's PSC_POSZ_P, which
+// maps metres -> m/s and feeds PSC_VELZ then PSC_ACCZ -- a three-stage cascade whose
+// velocity loop supplies the damping. Copying their 3.0 here (which we did) makes 0.33 m
+// of error saturate full throttle with NO damping term, i.e. a guaranteed bounce. That
+// is exactly what the 2026-08-07 water test reported.
+//
+// 0.5 => 1 m error asks for half throttle. D is the velocity damping the loop never had.
+#define DEF_DEPTH_P             0.5f
+#define DEF_DEPTH_I             0.1f
+#define DEF_DEPTH_D             0.2f
 
 // Depth sensor (Bar30/MS5837) health. Samples are published ~20 Hz; if none arrives for
 // this long the depth reading is treated as INVALID, which blocks DEPTH_HOLD/AUTO and

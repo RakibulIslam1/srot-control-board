@@ -13,7 +13,12 @@
 namespace autotune {
 
 // Relay amplitudes per phase kind.
-static const float A_TORQUE = 0.30f;   // rate phase: direct torque
+// 0.10, not 0.30. MEASURED in water 2026-08-07: 30% torque drove this hull to an
+// amplitude of 1.27 rad/s (~73 deg/s), which the new ceiling correctly refused rather
+// than converting into gains. That is not a limit cycle, it is a thrash. Ku = 4A/(pi*a)
+// is a ratio, so gentler excitation yields a SIMILAR Ku from a measurement that stays
+// inside the linear range -- less excitation is strictly better here, not a compromise.
+static const float A_TORQUE = 0.10f;   // rate phase: direct torque
 static const float A_RATE   = 0.50f;   // angle phase: rate command (rad/s)
 static const float A_HEAVE  = 0.30f;   // depth phase: heave demand
 
@@ -43,7 +48,7 @@ static const GainLimit LIMITS[] = {
     { 12.0f, 0.0f, 0.0f },   // angle roll  (def 4.5, P-only)
     { 12.0f, 0.0f, 0.0f },   // angle pitch (def 4.5, P-only)
     { 12.0f, 0.0f, 0.0f },   // angle yaw   (def 4.5, P-only)
-    { 10.0f, 2.0f, 0.5f },   // depth       (def 3.0 / 0.5 / 0)
+    { 10.0f, 2.0f, 0.5f },   // depth       (def 0.5 / 0.1 / 0.2)
 };
 
 // 20 s, not 8. Median statistics need samples, and 8 s with MIN_PERIODS plus two discarded
