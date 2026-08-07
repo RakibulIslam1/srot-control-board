@@ -750,7 +750,18 @@
 // Rev 8 is a separate number even though it NEVER REACHED HARDWARE -- duburi_ws already
 // adopted "rev 8" in their docs as the DEPTH_ERR/DEPTH_OUT suppression release, and quietly
 // widening what that number means is the precise failure §8.3 was written about.
-#define SROT_FW_BEHAVIOUR_REV   9
+// Rev 10: YAW SENSE IS CORRECTED. BNO_SWAP_ROLL_PITCH was an improper transform (swap x/y,
+// keep z = determinant -1), which left the frame left-handed and SILENTLY INVERTED YAW while
+// roll and pitch read correctly. Measured in water 2026-08-07: turning right made yaw
+// DECREASE; MANUAL was fine (open loop) and STABILIZE/DEPTH_HOLD span the hull.
+//
+// ⚠ ANY HEADING RECORDED AGAINST REV <= 9 HAS THE OPPOSITE SENSE, including absolute
+// MOVE_TURN targets. Re-run the mag alignment after flashing.
+//
+// Also: MOTOR_DETECT decides on the projection of the gyro onto the expected angular
+// direction instead of one "dominant" axis (which was degenerate for M5-M8 and produced a
+// wrong vertical result), and it now ends DISARMED in MANUAL instead of armed in STABILIZE.
+#define SROT_FW_BEHAVIOUR_REV   10
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.

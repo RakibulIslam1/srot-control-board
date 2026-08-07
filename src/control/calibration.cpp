@@ -332,18 +332,48 @@ void update(float roll, float pitch, float yaw,
                 if (gmag > 0.15f) s_md_t = now;
                 if (now - s_md_t >= 500) { s_md_phase = 1; s_md_t = now;
                                            s_md_peak[0] = s_md_peak[1] = s_md_peak[2] = 0; }
-            } else if (s_md_phase == 1) {          // THRUST — pulse up, capture peak gyro
+            } else if (s_md_phase == 1) {          // THRUST — pulse up, capture peak PROJECTION
                 driveTestMotor((int8_t)s_motor_idx, 0.30f, 200);
-                if (fabsf(gx) > fabsf(s_md_peak[0])) s_md_peak[0] = gx;
-                if (fabsf(gy) > fabsf(s_md_peak[1])) s_md_peak[1] = gy;
-                if (fabsf(gz) > fabsf(s_md_peak[2])) s_md_peak[2] = gz;
+                // Project the LIVE gyro sample onto this motor's expected angular direction
+                // and keep the signed peak of that projection.
+                //
+                // This replaces three independent per-axis peaks, which could not be combined
+                // afterwards: they are captured at different instants, so they are three
+                // scalars, not a vector, and a dot product formed from them is meaningless.
+                // Projecting each sample as it arrives keeps the measurement a true vector
+                // operation.
+                {
+                    float e[3]; mixer::motorAngular(s_motor_idx, e[0], e[1], e[2]);
+                    const float en = sqrtf(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
+                    if (en > 0.1f) {
+                        const float proj = (gx*e[0] + gy*e[1] + gz*e[2]) / en;
+                        if (fabsf(proj) > fabsf(s_md_peak[0])) s_md_peak[0] = proj;
+                    }
+                    // Cross-axis residual: the part of the response NOT along e. If this
+                    // rivals the projection the measurement is not trustworthy.
+                    const float gmag2 = gx*gx + gy*gy + gz*gz;
+                    const float along = (en > 0.1f) ? (gx*e[0] + gy*e[1] + gz*e[2]) / en : 0.0f;
+                    const float resid = sqrtf(fmaxf(0.0f, gmag2 - along*along));
+                    if (resid > s_md_peak[1]) s_md_peak[1] = resid;
+                }
                 if (now - s_md_t >= 500) s_md_phase = 2;
             } else {                                // DETECT — sign vs expected
-                float e[3]; mixer::motorAngular(s_motor_idx, e[0], e[1], e[2]);
-                int dom = 0;
-                for (int a = 1; a < 3; ++a) if (fabsf(e[a]) > fabsf(e[dom])) dom = a;
+                // Decide on the PROJECTION, not on one "dominant" axis.
+                //
+                // The old code picked dom = argmax|e[a]| with a STRICT >, which is degenerate
+                // for this frame. mixer.cpp gives the horizontal motors (0,0,+-1) -- yaw only,
+                // unambiguous -- but every vertical motor (+-1,+-1,0), so |roll| == |pitch|
+                // and dom NEVER left 0. All four verticals were judged on roll alone with an
+                // equally large pitch term discarded. At the surface the hull is stiff in
+                // roll/pitch from buoyancy and free in heave, so that roll term is small and
+                // cross-coupled -- and in the 2026-08-07 water test it came out wrong for all
+                // four verticals while the horizontals, decided on a clean isolated yaw
+                // signal, came out right. That exact split is what the projection removes.
+                const float peak  = s_md_peak[0];
+                const float resid = s_md_peak[1];
 
-                if (fabsf(e[dom]) > 0.1f && fabsf(s_md_peak[dom]) > 0.05f) {
+                // Require a real response AND that it is mostly along the expected direction.
+                if (fabsf(peak) > 0.05f && fabsf(peak) > resid) {
                     // WHAT WE JUST MEASURED IS AN AGREEMENT, NOT AN ABSOLUTE DIRECTION.
                     // The thrust pulse above is driven through in.dir[] — the test-override
                     // branch in task_control_loop calls oneToDshot(test_throttle,
@@ -366,7 +396,9 @@ void update(float roll, float pitch, float yaw,
                     //
                     // Composing is correct from ANY starting state in one pass, and is
                     // idempotent: a second run measures agreement = +1 and changes nothing.
-                    int8_t agree = ((s_md_peak[dom] > 0) == (e[dom] > 0)) ? 1 : -1;
+                    // The projection is already expressed IN the expected direction, so its
+                    // sign IS the agreement -- no per-axis comparison needed.
+                    int8_t agree = (peak > 0) ? 1 : -1;
                     StateLock lk(g_state.mtx_cal);
                     if (lk.ok()) {
                         int8_t cur = g_state.cal.motor_dir[s_motor_idx];

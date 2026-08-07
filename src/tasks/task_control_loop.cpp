@@ -371,9 +371,25 @@ void Task_ControlLoop(void* pv) {
             { StateLock lk(g_state.mtx_cal, pdMS_TO_TICKS(2));
               if (lk.ok()) detect_running = (g_state.cal.routine == CalRoutine::MOTOR_DETECT); }
             if (!detect_running) {
-                in.mode = FlightMode::STABILIZE;
+                // MANUAL and DISARMED, not STABILIZE-still-armed.
+                //
+                // MOTOR_DETECT has just rewritten the very direction signs the attitude
+                // controllers depend on. Handing an armed hull straight to a closed-loop
+                // controller means the first thing that happens after an unverified sign
+                // change is a control loop acting on it. On 2026-08-07 that flipped the
+                // vehicle in water the instant detect finished.
+                //
+                // The operator re-arms when they are ready to check the result. Disarming is
+                // the part that matters -- a mode change alone would still leave thrusters live.
+                in.mode  = FlightMode::MANUAL;
+                in.armed = false;
                 StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));
-                if (lk.ok()) g_state.control.mode = FlightMode::STABILIZE;
+                if (lk.ok()) {
+                    g_state.control.mode  = FlightMode::MANUAL;
+                    g_state.control.armed = false;
+                }
+                mav_stream::queueStatusText(MAV_SEVERITY_INFO,
+                    "Motor detect done - DISARMED in MANUAL. Re-arm to verify axes.");
             }
         }
 
