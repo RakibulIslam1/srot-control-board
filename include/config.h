@@ -467,7 +467,11 @@
 // floor forced DShot 1173 for a 1 % command — measured at 941 rpm on a T200, i.e. ~26 %
 // of full speed from the smallest possible input, with nothing usable below it. Let the
 // ESC's own startup power handle break-away and keep the firmware floor just above zero.
-#define DEF_MOT_SPIN_MIN        0.02f       // min active output (crosses prop deadband)
+// 0.15, matching the operator's ArduSub config for this hull. At 0.02 the mixer issued
+// commands too small to break stiction: the water test logged repeated
+// "Thruster N STALLED: dshot=146 rpm=0". This is the floor for a NON-ZERO command only --
+// DEF_MOT_SPIN_ARM stays 0, so nothing turns on arm or at neutral stick.
+#define DEF_MOT_SPIN_MIN        0.15f       // min active output (crosses prop deadband)
 #define DEF_MOT_SPIN_ARM        0.0f        // armed idle (0 = props stopped at neutral)
 
 // Slow RPM-based thrust normalisation (control/thrust_trim). This is how "20 % for 5 s
@@ -599,9 +603,14 @@
 // is exactly what the 2026-08-07 water test reported.
 //
 // 0.5 => 1 m error asks for half throttle. D is the velocity damping the loop never had.
+// MEASURED IN WATER 2026-08-07 -- these are the values that actually hold depth well,
+// not reasoned ones. P 0.5 (my structural estimate) was right; D 0.2 was 20x too strong
+// and the operator brought it to 0.01, which made the hold near perfect. Derivative on a
+// baro-derived depth is differentiating a noisy sensor, so it needs far less gain than
+// the loop's scale suggests.
 #define DEF_DEPTH_P             0.5f
 #define DEF_DEPTH_I             0.1f
-#define DEF_DEPTH_D             0.2f
+#define DEF_DEPTH_D             0.01f
 
 // Depth sensor (Bar30/MS5837) health. Samples are published ~20 Hz; if none arrives for
 // this long the depth reading is treated as INVALID, which blocks DEPTH_HOLD/AUTO and
