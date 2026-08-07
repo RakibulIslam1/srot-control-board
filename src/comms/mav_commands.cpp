@@ -799,9 +799,18 @@ void update(uint32_t now) {
     // ACCEPTED (the request WAS accepted; the write is deferred to here), so this message
     // is the only signal that the tune did not persist — it is what the GCS Save button,
     // autotune and motor_tune all rely on.
-    if (!params::serviceSaveAll()) {
-        mav_stream::sendStatusText(MAV_SEVERITY_CRITICAL,
-                                   "SAVE FAILED - params NOT written (NVS full?)");
+    // Report BOTH outcomes, not just the failure. Silence-means-success is unusable as an
+    // acknowledgement: the GCS cannot tell "written" from "the request never arrived" or
+    // "the board is wedged", so its Save button could only ever claim success on a guess.
+    // Emitting a positive line makes the write observable, which is what the params tab
+    // acknowledges on.
+    if (params::saveAllPending()) {
+        if (params::serviceSaveAll()) {
+            mav_stream::sendStatusText(MAV_SEVERITY_INFO, "Params saved to flash");
+        } else {
+            mav_stream::sendStatusText(MAV_SEVERITY_CRITICAL,
+                                       "SAVE FAILED - params NOT written (NVS full?)");
+        }
     }
 
     // Stream the parameter list with NON-BLOCKING tx so a full TX buffer never

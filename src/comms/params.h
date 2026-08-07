@@ -238,6 +238,9 @@ bool saveAll();
 // this is the only chance any bulk save (GCS "Save to flash", autotune, motor_tune)
 // gets to admit that a whole tune did not persist.
 void requestSaveAll();
+// True while a requested saveAll() has not yet been serviced. Check BEFORE
+// serviceSaveAll() to distinguish a real write from a no-op -- both return true.
+bool saveAllPending();
 bool serviceSaveAll();
 
 // Validate a GPIO param value: returns it if a usable ESP32 GPIO (0..39, not the
