@@ -438,9 +438,13 @@
 #define PM1_VMULT_LEGACY_MAX    1.0f
 
 // Cascaded angle→rate PID starting gains (per axis; tuned later — see ARCHITECTURE.md §4)
-#define DEF_ANG_RLL_P           4.5f
-#define DEF_ANG_PIT_P           4.5f
-#define DEF_ANG_YAW_P           4.5f
+// 6.0, not 4.5. 4.5 is ArduCOPTER's angle-P default; ArduSUB ships 6.0, and the
+// operator's own Pixhawk running ArduSub 4.5.3 flew THIS hull smoothly at 6.0.
+// Shipping the Copter value on a sub is a straight transcription error and it left
+// the attitude loop a third weaker than the configuration known to work here.
+#define DEF_ANG_RLL_P           6.0f
+#define DEF_ANG_PIT_P           6.0f
+#define DEF_ANG_YAW_P           6.0f
 #define DEF_RAT_RLL_P           0.135f
 #define DEF_RAT_RLL_I           0.090f
 #define DEF_RAT_RLL_D           0.0036f
