@@ -7,6 +7,7 @@
 #include <Adafruit_SH110X.h>
 #include <string.h>
 #include "config.h"
+#include "state_types.h"     // FlightMode — modeName() switches on the enum, not raw numbers
 #include "comms/ui_log.h"
 
 extern const char* g_reset_reason;   // captured in main.cpp
@@ -19,20 +20,25 @@ static TwoWire*  s_wire = nullptr;
 static bool      s_constructed = false;
 
 // Short labels so the mode tab fits the narrower left column.
+// Mirrors FlightMode in state_types.h. Cases are written against the ENUM, not raw numbers,
+// so adding a mode cannot silently fall through to "?" again -- which is exactly what
+// happened to AUTO (23): it was missing here while Bondor mapped it correctly, so the board
+// screen showed "?" for a mode the vehicle was genuinely in.
 static const char* modeName(uint8_t m) {
-    switch (m) {
-        case 0:   return "STAB";
-        case 1:   return "ACRO";
-        case 2:   return "DEPTH";
-        case 9:   return "SURF";
-        case 19:  return "MANUAL";
-        case 20:  return "MOTDET";
-        case 21:  return "ATUNE";
-        case 22:  return "MTUNE";
-        case 100: return "STUNT";
-        case 101: return "PATRN";
-        default:  return "?";
+    switch ((FlightMode)m) {
+        case FlightMode::STABILIZE:    return "STAB";
+        case FlightMode::ACRO:         return "ACRO";
+        case FlightMode::DEPTH_HOLD:   return "DEPTH";
+        case FlightMode::SURFACE:      return "SURF";
+        case FlightMode::MANUAL:       return "MANUAL";
+        case FlightMode::MOTOR_DETECT: return "MOTDET";
+        case FlightMode::AUTOTUNE:     return "ATUNE";
+        case FlightMode::MOTOR_TUNE:   return "MTUNE";
+        case FlightMode::AUTO:         return "AUTO";
+        case FlightMode::STUNT:        return "STUNT";
+        case FlightMode::PATTERN:      return "PATRN";
     }
+    return "?";   // no default: a new enumerator now warns at compile time instead
 }
 
 bool begin(TwoWire* wire) {
