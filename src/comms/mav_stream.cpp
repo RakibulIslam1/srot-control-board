@@ -8,6 +8,7 @@
 #include "comms/params.h"            // g_params.leak_en — the LEAK health bit's "enabled" state
 #include "control/depth_control.h"   // preview()/lastError() — depth-loop observability
 #include "control/mixer.h"           // mix() is pure — preview the depth chain disarmed
+#include "control/yaw_ref.h"         // state() — is the heading absolute or boot-relative?
 #include "drivers/bar30.h"           // jitterP2P() — why depth withdrew
 #include "comms/ui_log.h"
 #include "config.h"
@@ -822,6 +823,22 @@ void update(uint32_t now) {
         // way to see whether the number the refusal keys on was moving at all. yaw_ref needs
         // >= 2, and the DCD save fires at >= 2.
         sendNamed(now, "MAGACC", (float)s.mag_acc);
+        // YAW_REF — the alignment state itself (yaw_ref::State enum), which nothing published.
+        //
+        // Without it there is no way to tell an ABSOLUTE heading from a relative one. If the
+        // reference never locked, ATTITUDE.yaw is measured from the BNO's boot orientation and
+        // an absolute MOVE_TURN turns to a meaningless number, silently. duburi_ws needs this
+        // to gate absolute turns and fall back to relative on its own.
+        //
+        // MAGACC is NOT a proxy for it and must not be used as one (see yaw_ref.cpp:179-182):
+        // the alignment is protected by the |B| plausibility band and the sample-agreement
+        // test, neither of which consults the sensor's self-assessment, and both of which can
+        // refuse at MAGACC 3. With a stored CAL_MAG_* need_acc drops to 0, so accuracy stops
+        // correlating with lock at all.
+        //
+        // 0 IDLE, 1 SAMPLING, 2 LOCKED, 3 REFUSED_CAL, 4 REFUSED_FIELD, 5 REFUSED_NOISE.
+        // Only 2 means the heading is absolute.
+        sendNamed(now, "YAW_REF", (float)yaw_ref::state());
         // Baro peak-to-peak over the jitter window. Published unconditionally (NOT gated on
         // depth_ok) because its whole job is to explain WHY depth just withdrew -- gating it
         // on the health it reports on would hide it exactly when it matters.
