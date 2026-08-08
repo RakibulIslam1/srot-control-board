@@ -183,6 +183,9 @@ static const Desc SCALARS[] = {
     { "DEPTH_P",        "DEPTH_P",        &g_params.depth_p,        DEF_DEPTH_P },
     { "DEPTH_I",        "DEPTH_I",        &g_params.depth_i,        DEF_DEPTH_I },
     { "DEPTH_D",        "DEPTH_D",        &g_params.depth_d,        DEF_DEPTH_D },
+    // Live-tunable so a jitter trip at the water can be raised over UDP instead of needing
+    // a USB flash mid-session. 0 falls back to the compiled default.
+    { "BARO_JIT_MAX",   "BARO_JIT_MAX",   &g_params.baro_jit_max,   15.0f },
     // Model-based control (Phase 2a) — see ALGORITHMS.md §5.
     { "ATC_DRAG_RLL",   "ATC_DRAG_RLL",   &g_params.atc_drag_rll,   DEF_ATC_DRAG_RLL },
     { "ATC_DRAG_PIT",   "ATC_DRAG_PIT",   &g_params.atc_drag_pit,   DEF_ATC_DRAG_PIT },

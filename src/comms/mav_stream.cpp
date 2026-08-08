@@ -873,6 +873,11 @@ void update(uint32_t now) {
         // depth_ok) because its whole job is to explain WHY depth just withdrew -- gating it
         // on the health it reports on would hide it exactly when it matters.
         sendNamed(now, "BARO_P2P", bar30::jitterP2P());
+        // WHY the baro is (un)healthy, not just that depth vanished. Ungated for the same
+        // reason BARO_P2P is: its whole job is to explain a withdrawal, so gating it on the
+        // health it reports would hide it exactly when it matters.
+        // 0 healthy | 1 jitter | 2 read failures | 3 not initialised
+        sendNamed(now, "BARO_HEALTH", (float)bar30::healthReason());
         // COMP_SEEN: has the CONFIGURED companion (FS_GCS_SYSID/COMPID) been heard since
         // boot? 0 = never, 1 = yes.
         //

@@ -8,6 +8,7 @@
 #include "config.h"
 #include "state_types.h"
 #include "control/mixer.h"
+#include "drivers/bar30.h"   // healthReason() — name WHY depth was refused
 #include "control/arming.h"
 #include "control/attitude_control.h"
 #include "control/depth_control.h"
@@ -355,8 +356,21 @@ void Task_ControlLoop(void* pv) {
             static uint32_t s_last_warn = 0;
             if (millis() - s_last_warn > 3000) {
                 s_last_warn = millis();
-                mav_stream::queueStatusText(MAV_SEVERITY_ERROR,
-                                            "No depth sensor - mode refused, using STABILIZE");
+                // Name the REASON. Three different faults produced this one message, so an
+                // intermittent refusal at the water was undiagnosable -- the operator saw a
+                // good depth number beside a "no sensor" error with no way to tell which
+                // fired. Jitter is by far the most common and is now tunable (BARO_JIT_MAX).
+                const uint8_t why = bar30::healthReason();
+                char b[64];
+                if (why == 1) {
+                    snprintf(b, sizeof(b), "Depth refused: baro jitter %.1f mbar",
+                             (double)bar30::jitterP2P());
+                } else if (why == 2) {
+                    snprintf(b, sizeof(b), "Depth refused: baro read failures");
+                } else {
+                    snprintf(b, sizeof(b), "Depth refused: baro not initialised");
+                }
+                mav_stream::queueStatusText(MAV_SEVERITY_ERROR, b);
             }
             in.mode = FlightMode::STABILIZE;
             StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(2));

@@ -53,6 +53,8 @@ struct Params {
     float rat_yaw_fltd, rat_yaw_fltt;
     // Depth-hold PID
     float depth_p, depth_i, depth_d;
+    // BARO_JIT_MAX -- peak-to-peak mbar above which the baro is declared unhealthy.
+    float baro_jit_max;
     // Model-based control (Phase 2a): angular drag feedforward, cross-coupling, CoB auto-trim.
     float atc_drag_rll, atc_drag_pit, atc_drag_yaw;
     float xc_yaw2rll, xc_yaw2pit;
