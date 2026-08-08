@@ -7,6 +7,7 @@
 // =============================================================================
 
 #include "drivers/bar30.h"
+#include "comms/params.h"   // BARO_JIT_MAX
 #include <Wire.h>
 #include <MS5837.h>
 #include <math.h>
@@ -69,6 +70,10 @@ static const float PRESS_MAX_MB = 40000.0f;    // ~300 m depth, past the Bar30's
 // The board is the right place for this even though duburi_ws added a host-side check too:
 // they can only refuse to ARM, the board can refuse AUTO.
 static const uint8_t JITTER_N          = 8;      // samples in the window (~0.4 s at 20 Hz)
+// DEFAULT only -- the live limit is the BARO_JIT_MAX parameter. It was compile-time, which
+// meant the one knob most likely to need adjusting could not be touched without a USB flash,
+// and this gate trips MID-RUN at the water where no flash is possible. The gate stays (a
+// phantom depth once turned arming into full vertical thrust); only its threshold moves.
 static const float   JITTER_MAX_MBAR   = 15.0f;  // peak-to-peak above this = not a sensor
 static float   s_hist[JITTER_N] = {0};
 static uint8_t s_hist_n = 0, s_hist_i = 0;
@@ -86,7 +91,8 @@ static bool jitterCheck(float press) {
         if (s_hist[i] < lo) lo = s_hist[i];
         if (s_hist[i] > hi) hi = s_hist[i];
     }
-    s_jitter_bad = (hi - lo) > JITTER_MAX_MBAR;
+    const float lim = (g_params.baro_jit_max > 0.0f) ? g_params.baro_jit_max : JITTER_MAX_MBAR;
+    s_jitter_bad = (hi - lo) > lim;
     return s_jitter_bad;
 }
 
@@ -178,6 +184,18 @@ bool read(Sample& out, float surface_mbar) {
 }
 
 bool healthy() { return s_ok && s_fail_n < FAIL_UNHEALTHY && !s_jitter_bad; }
+
+// WHY it is unhealthy, not just that it is. Three distinct faults produced one identical
+// "No depth sensor" message, so an intermittent failure at the water was undiagnosable:
+// the operator saw a perfectly good depth number beside a no-sensor error and had no way to
+// tell which of the three had fired. Published as BARO_HEALTH.
+//   0 healthy | 1 jitter (varying too much) | 2 read failures | 3 not initialised/implausible
+uint8_t healthReason() {
+    if (!s_ok)                        return 3;
+    if (s_fail_n >= FAIL_UNHEALTHY)   return 2;
+    if (s_jitter_bad)                 return 1;
+    return 0;
+}
 
 bool jittery() { return s_jitter_bad; }
 

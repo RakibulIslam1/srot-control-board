@@ -30,6 +30,9 @@ bool read(Sample& out, float surface_mbar);
 // REFUSES those modes. That is deliberate: fabricated depth on a loop that has never run
 // closed is the worse failure.
 bool healthy();
+// 0 healthy | 1 jitter | 2 read failures | 3 not initialised. Published as BARO_HEALTH so an
+// intermittent unhealthy spell is readable after the fact instead of only in the moment.
+uint8_t healthReason();
 
 // Raw calibration PROM word i (0..6), unscaled, for diagnostics. Log these before concluding
 // a sensor is bad — it distinguishes a genuinely corrupt PROM from a CRC implementation bug.

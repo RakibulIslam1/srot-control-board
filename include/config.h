@@ -797,7 +797,12 @@
 // entire mission on a dead hull. Now MAV_RESULT_TEMPORARILY_REJECTED + "arm first".
 //
 // Also adds per-axis ATC_RAT_*_FLTD and the previously absent ATC_RAT_*_FLTT target filter.
-#define SROT_FW_BEHAVIOUR_REV   13
+// Rev 14: the depth refusal names WHY (jitter / read failures / not initialised) instead of
+// one identical "No depth sensor" for three different faults, publishes BARO_HEALTH so an
+// INTERMITTENT unhealthy spell is readable from a recording after the fact, and makes the
+// jitter threshold a parameter (BARO_JIT_MAX) so it can be raised over UDP at the water
+// instead of needing a USB flash mid-session.
+#define SROT_FW_BEHAVIOUR_REV   14
 // Marker for the one-shot PM2_VMULT units migration (volts-per-count -> aux trim). A marker,
 // not a value test: re-testing the value on every boot would overwrite a small trim the
 // operator set deliberately, which is the failure this round removed from PM1_VMULT.
