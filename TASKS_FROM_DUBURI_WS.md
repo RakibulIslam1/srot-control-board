@@ -342,3 +342,297 @@ We set `MOT_1_DIRECTION = -1` and `MOT_8_DIRECTION = -1` live and confirmed by r
 giving a uniform effective `[-1] × 8`. **Runtime only, deliberately not saved** — a power
 cycle reverts it. That keeps the hull flyable now; the firmware fix is what makes it stop
 happening.
+
+---
+
+# Round 8 — water-test readiness (2026-08-07, all measured on the vehicle)
+
+Read over a **BlueOS Bridget bridge**, board disarmed in MANUAL, firmware `d6f1da5` (rev 7).
+duburi_ws is at `bec30e8` on branch `srot`, **844 tests green with the drift suite run
+against this commit** — no wire constant has moved, so rev 7 is adopted as our baseline
+(`FW_BEHAVIOUR_REV = 7`). Our required floor deliberately **stays at 2**; the reasoning is
+in §8.3 below and it is the interesting part of this round.
+
+Four asks (§8.1–§8.4), then what we verified for you (§8.5) and one correction we owe you
+(§8.6). **Only §8.1 is a code change we are requesting.**
+
+---
+
+## §8.1 — ⛔ `DEPTH_ERR` / `DEPTH_OUT` are stale while disarmed, and we gate arming on them
+
+**This is the one firmware change we are asking for, and it is your own rev-3 doctrine
+applied to the last place it has not reached.**
+
+`mav_stream.cpp:813-815` sends `DEPTH_ERR`/`DEPTH_OUT` from `depth::lastError()` /
+`lastOutput()` whenever `s.depth_ok`. The comment beside them is accurate — *"the REAL
+controller's last error and output"* — and that is exactly the problem: while the vehicle is
+**disarmed the controller never runs**, so `lastError()`/`lastOutput()` return whatever they
+held when it last did. The values keep streaming at full rate and look completely live.
+
+We have now measured this twice, and the two readings look opposite while saying the same
+thing:
+
+| firmware | `DEPTH_CMD` | `DEPTH_ERR` | `DEPTH_OUT` | samples |
+|---|---|---|---|---|
+| rev 4 | −0.329 (moving) | **0.000** | **0.000** | 90+ |
+| rev 5 | moving | **−0.029** | **−0.115** | 74, zero variance |
+
+A live controller cannot hold error at exactly 0.000 against a −0.33 m command, and it
+cannot hold a *constant* error to three decimals while the command moves. Both rows are a
+frozen register, not a settled loop.
+
+**Why this matters to us specifically, and why we are not just fixing it on our side:**
+`SrotFC.check_depth_loop_settled()` **refuses to arm while `|DEPTH_OUT| ≥ 0.90`**. We added
+that guard after the 2026-08-02 Bar30 fault, where a saturated depth integrator turned
+arming into full vertical thrust with the horizontals idle. The guard reads a value that,
+disarmed, cannot be current — so it is deciding an arming question from a stale register.
+Today it passes (`DEPTH_OUT = +0.00`), and **we cannot tell whether that means "settled" or
+"never ran"**. Those need to be distinguishable before we dive.
+
+This is the same class of bug rev 3 was built to remove — *"the board refuses to report data
+it cannot stand behind"* — and it is the last surviving instance we can find. It is also
+strictly worse than absence: a suppressed value makes our guard fail closed, whereas a stale
+one makes it pass for the wrong reason.
+
+**Suggested fix (yours to design — you know the loop's structure):** stamp the last time
+`depth::update()` actually executed, and suppress `DEPTH_ERR`/`DEPTH_OUT` when that stamp is
+older than a couple of control periods. Then absence means "the loop is not running", which
+is true and useful, and a present value means the loop ran — which is what our guard has
+always assumed.
+
+⚠ **Please do not "fix" this by making the loop run while disarmed.** We do not want a depth
+controller integrating against a stationary hull on the bench; the honest-absence version is
+both smaller and safer.
+
+**`DEPTH_CMD` is not affected and should not change** — it is a `depth::preview()`, computed
+on demand, and it is genuinely live. It is also the single most useful line you have given us
+for bench work. Keep it exactly as it is.
+
+---
+
+## §8.2 — ✅ `FRAME_REVERSE` is correct on the hull — please do not "correct" it again
+
+We read every relevant param off the board today:
+
+```
+FRAME_REVERSE   = 1
+MOT_n_DIRECTION = [-1, +1, +1, +1, +1, +1, +1, -1]      M1, M8 only — as-flown
+CAL_LVL_R = 0.0396   CAL_LVL_P = 0.0131   MAG_YAW_REF = 1   JS_GAIN_DEFAULT = 1.00
+```
+
+That is exactly the configuration `83ef62e` + `502eb23` intend. Net per-motor sign is
+`s = -(w · dir) = [-1] × 8`, uniform — the whole-frame flip intact, with per-thruster wiring
+compensated separately. **Your layering argument was right**, and the vehicle is in the state
+it describes.
+
+We flag it because **we very nearly broke it.** Our own 2026-08-06 restore wrote
+`MOT_n_DIRECTION = [-1] × 8` — a *uniform* flip, made before `FRAME_REVERSE` existed, when it
+was the only whole-frame tool available. Stacked on `FRAME_REVERSE = 1` those two cancel, and
+the residual lands on **M2–M7**:
+
+```
+w              = [-1, +1, +1, +1, +1, +1, +1, -1]     M1, M8 wired backwards
+dir = correct  -> s = [-1]*8                          uniform: frame flip intact
+dir = [-1]*8   -> s = [-1, +1, +1, +1, +1, +1, +1, -1]   M1/M8 out of step with M2-M7
+```
+
+That second row is the **2026-08-06 fault verbatim**, and through your yaw column
+`[+1,-1,-1,+1]` it collapses to `[-1,-1,-1,+1]` — three thrusters pushing the same way,
+which is the exact sentence in your commit message. Someone corrected it between our restore
+and today (consistent with `502eb23` reporting M1/M8-only off a board on 08-07). **Whoever
+did: thank you, and please do not let a future param restore put `[-1] × 8` back.**
+
+Our side now documents `FRAME_REVERSE = 1` **and** `MOT_1/MOT_8 = -1` as the intended pair,
+and we added `test_frame_reverse_still_defaults_off` so that if `DEF_FRAME_REVERSE` ever ships
+as `1`, our suite fails loudly instead of silently inheriting an inverted frame.
+
+**No action needed** unless you disagree with the reading — in which case say so before we dive.
+
+---
+
+## §8.3 — Please bump `SROT_FW_BEHAVIOUR_REV` for a behaviour-changing *param default*
+
+A process ask, not a code one, and it comes out of §8.2.
+
+Rev 7's PR into duburi_ws described the release as *"additive — nothing that worked on rev 6
+changes."* For a **stock board** that is exactly true, and the rev number is honest:
+`DEF_FRAME_REVERSE = 0`, so a freshly-erased rev-7 board behaves identically to rev 6. We
+have no complaint about the number.
+
+What the number cannot carry is that **five commits shipped inside one 6→7 bump**, and one of
+them made a param load-bearing on our hull. Our drift suite passed clean through the whole
+release — correctly, since it reads your headers and no constant moved. So both guards were
+green while the meaning of every axis command on this vehicle changed.
+
+That is a structural blind spot, not a mistake by anyone: **a monotonic integer describes
+compiled behaviour, and `FRAME_REVERSE` lives in NVS.** On an architecture where you own every
+control loop, configuration *is* behaviour.
+
+Two things would close it, both cheap:
+
+1. **Bump the rev when a `DEF_*` default changes something a vehicle already in service will
+   feel** — even when the code is additive. `502eb23` changing `MOT_1/MOT_8_DIRECTION`
+   defaults is the case in point: harmless for boards in service (NVS beats defaults, as your
+   commit correctly notes), but it changes what a *freshly erased* board does, and that is a
+   behaviour a companion should be able to gate on.
+2. **Consider a boot `STATUSTEXT` naming the load-bearing config** — one line at
+   `MAV_SEVERITY_INFO`, e.g. `FRAME_REVERSE=1 MOT_DIR=-1,1,1,1,1,1,1,-1`. It costs nothing,
+   it appears in every log and every GCS, and it makes the vehicle's actual configuration
+   visible at the moment someone is deciding whether to arm.
+
+**Our floor stays at 2 regardless**, and deliberately: `FRAME_REVERSE` is a param, so raising
+`FW_BEHAVIOUR_REV_REQUIRED` would neither catch a rev-7 board with it left at 0 nor help one
+that has it set — while it *would* strand a working rev-2 board. The check that catches
+configuration is a param read, which is what we built (§8.5).
+
+---
+
+## §8.4 — ⚠ `FS_GCS_COMPID` reverts to the bench-mode wildcard, and it persists
+
+Measured today: **`FS_GCS_ENABLE = 1`, `FS_GCS_COMPID = 0`.**
+
+We corrected this to `191` on **2026-08-06** and saved it. One day later it reads `0` again.
+
+`0` is the wildcard, so `companionLost()` is satisfied by *any* station — Bondor on the bench
+keeps it fed. In water that makes a dead Jetson indistinguishable from a live GCS: the
+failsafe never fires and the hull station-keeps instead of surfacing. Exactly the scenario
+`FS_GCS_SYSID`/`COMPID` were introduced to prevent.
+
+**We are not filing this as a firmware defect** — the default is `191`, the mechanism is
+correct, and wildcarding is a legitimate bench affordance. The gap is that a bench escape
+hatch can become **permanent, silently**: Bondor's bench mode is runtime-only until someone
+presses Save, and it has now been saved twice.
+
+We fixed our half — it is a graded `FAIL` in `bringup_check --srot`, verified against the
+live board. `bringup_check` had been reporting **0 FAIL on a vehicle in bench mode**, so this
+was our blind spot as much as anyone's.
+
+**What would help from your side, in rough order of value:**
+
+1. A **boot-time `STATUSTEXT` at `MAV_SEVERITY_WARNING`** when `FS_GCS_ENABLE = 1` and
+   `FS_GCS_COMPID = 0` — "GCS failsafe WILDCARDED (bench mode)". A widened safety margin
+   should be noisy every session, not silent.
+2. Worth discussing with the Bondor team: bench mode arguably should not be **savable** at
+   all, or should prompt hard on Save. `4aaa755`'s `COMP_SEEN` already lets Bondor stop
+   *offering* bench mode when the latch says it is unnecessary, which removes most of the
+   reflex-click pressure that causes this. That commit is the right fix upstream of us.
+
+We will set it back to `191` before the water test and confirm via the new preflight line.
+
+---
+
+## §8.5 — What we changed on our side this round (so your next PR does not re-fix it)
+
+- **`FW_BEHAVIOUR_REV` 6 → 7.** Drift suite green against `d6f1da5`. `REQUIRED` stays 2.
+- **`_gcs_failsafe_verdict` + `_read_param` in `bringup_check`** — reads `FS_GCS_ENABLE` /
+  `FS_GCS_COMPID` over the link and FAILs on the wildcard (§8.4). Sequential reads only, with
+  retries for the bridge's frame loss.
+- **`test_frame_reverse_still_defaults_off`** — fails if `DEF_FRAME_REVERSE` ever ships as 1.
+- Documented `FRAME_REVERSE = 1` **and** `MOT_1/MOT_8 = -1` as the intended pair, with the
+  double-inversion derivation, so nobody on our side restores `[-1] × 8` again.
+
+**We have NOT changed anything that touches your wire.** `srot_protocol.py` moved only in
+comments and the rev tracker.
+
+---
+
+## §8.6 — ⚖ Correction we owe you: the "dead UDP uplink" was a stale bridge, not the link
+
+Our PR #5 into duburi_ws reported the uplink completely dead over the Bridget bridge —
+perfect downlink, zero `COMMAND_ACK`, zero `PARAM_VALUE` — with two candidate causes, the
+second being *"a one-way serial leg… a wiring question."* **Please do not chase that wiring
+fault. It is cause #1, and it is already documented.**
+
+Measured today from the topside box on `192.168.2.1`:
+
+```
+FRAME_REVERSE -> 1.0   (0.0s)        first PARAM_REQUEST_READ, first try
+12/12 params read                    FS_GCS_*, MOT_1..8_DIRECTION, CAL_LVL_*, MAG_YAW_REF
+bringup_check --srot -> [PASS] FW behaviour rev  7    via MAV_CMD_REQUEST_MESSAGE(148)
+```
+
+That last line is **the exact probe reported as silent**, answering.
+
+The decisive difference is what the link was. When we started, BlueOS's own
+`/v1.0/serial_ports` listed **only the Pi's internal UARTs** — no `/dev/ttyUSB0` at all — and
+there were zero bridges. Once the board enumerated, we created a bridge from nothing (the
+pre-emptive `DELETE` returned `{"detail":"Bridge doesn't exist."}`) and everything worked
+first try.
+
+Your downlink arriving from `192.168.2.2:14551` means a bridge *did* exist when you measured
+— which is consistent rather than contradictory. **A Bridget bridge whose serial fd has died
+forwards nothing toward the board while continuing to list as healthy.** Perfect downlink
+with a dead uplink is precisely what a half-dead bridge looks like, and the board had been
+unplugged and reflashed twice in that window.
+
+Your probe was right and we have kept it as a standing gate. The rule that goes with it:
+**after any flash, unplug or re-seat, DELETE and recreate the bridge before trusting the
+session**, then probe.
+
+Also, so nobody re-measures it: **`MAGACC` is a `NAMED_VALUE_FLOAT`** (`mav_stream.cpp:771`),
+not a param. Our first probe reported it `UNREADABLE` because we asked for it as a param —
+our error, not a board fault.
+
+---
+
+## §8.7 — Water-test gates still open (not asks; recorded so both sides agree)
+
+1. **The depth loop has never run closed.** Two armed bench checks, and they gate **every
+   AUTO move** including `move_forward` — `SROT_MOVE` enters `AUTO` and the `AUTO` branch
+   closes the loop under every primitive (`task_control_loop.cpp:240-241` on `d6f1da5`). An in-air
+   `move_forward` is not partial validation. **§8.1 is what makes the disarmed half of this
+   readable.**
+2. **`FRAME_REVERSE` is unverified under thrust.** MANUAL axes first (no attitude feedback,
+   so it cannot diverge), STABILIZE second, autotune last. Your own PR flagged this; we
+   restate it because §8.2 confirms the *configuration* and says nothing about the *physics*.
+3. **`MOTOR_DETECT` in water, armed** — still owed from Round 7, and rev 7 does not change it.
+   ✅ We checked one thing you may be asked about: **`FRAME_REVERSE` does NOT corrupt
+   MOTOR_DETECT.** The test-override branch (`task_control_loop.cpp:779-790` on `d6f1da5`) is a separate
+   `if` that never reaches `mixer::mix()`, so the flip is not applied to the detect pulse —
+   which is correct, since the routine measures whether one thruster agrees with its mixer
+   column, a question the whole-frame flip does not affect. No change wanted here.
+4. **Mag calibration — threshold corrected, and the gate is NOT closed.** We wrote
+   "`MAGACC = 1`" here; the firmware needs **`>= 2`** (`yaw_ref.cpp:185`,
+   `need_acc = have_our_cal ? 0 : 2`). The board reads **`MAGACC 2`** with
+   `MAG_YAW_REF = 1`, so the accuracy gate is satisfied — but see §8.8: we cannot
+   observe whether `yaw_ref` actually **LOCKED**, and accuracy alone does not prove it.
+5. **`FS_GCS_COMPID` back to 191** and saved — ours to do, §8.4.
+
+
+---
+
+## §8.8 — `yaw_ref`'s state is invisible to us, so we cannot gate an absolute turn
+
+Found while verifying §8.7.4 over USB. **Same shape as §8.1: the board knows something
+safety-relevant and does not say it.**
+
+`yaw_ref::State` has `LOCKED` and `REFUSED_CAL` (`yaw_ref.h:38-42`), and the difference is
+load-bearing for us: if the reference never locked, `ATTITUDE.yaw` is **relative to wherever
+the BNO booted** rather than a magnetic heading, and our absolute `MOVE_TURN` (p4=1) then
+turns to a number that means nothing. **There is no `sendNamed` for that state** — the only
+mag-related telemetry is `MAGACC` (`mav_stream.cpp:771`).
+
+`MAGACC` is not a usable proxy, and your own comment is why. `yaw_ref.cpp:179-182`:
+
+> *"What protects the alignment is unchanged and does not depend on the sensor's opinion of
+> itself: `|B|` must be in band, and the sampled headings must agree to within
+> `MAX_SPREAD_RAD` over at least `MIN_SPAN_MS`."*
+
+Both of those can fail with `MAGACC = 3`. And with a stored calibration `need_acc` drops to
+`0`, so accuracy stops correlating with the outcome at all. So a companion reading
+`MAGACC 2` — which is exactly what we read today — still cannot tell a locked reference from
+a refused one.
+
+**Ask: publish the state as a `NAMED_VALUE_FLOAT`**, e.g. `YAWREF` with the enum value
+(0=IDLE, 1=SAMPLING, 2=LOCKED, 3=REFUSED_CAL). One line beside `MAGACC`. That lets us do the
+right thing automatically: allow absolute `turn` when LOCKED, fall back to relative turns
+when not, and say why in the preflight instead of asking an operator to remember.
+
+**Until it exists we will treat absolute `MOVE_TURN` as ungated and prefer relative turns**,
+which costs us accuracy on the RoboSub headings we care about — so this one has a direct
+competition cost, unlike most observability asks.
+
+*(Both §8.1 and §8.8 are the same request in different clothes: on an architecture where you
+own every control loop, the companion cannot verify a loop it cannot see. We are not asking
+for more telemetry in general — only for the two flags that decide whether a command we are
+about to send means what we think it means.)*
