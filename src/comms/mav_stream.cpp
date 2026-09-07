@@ -185,16 +185,29 @@ static void sendEscStatus(const Snap& s, uint32_t t) {
     // current (cA), totalcurrent (mAh), rpm, count. RPM is uint16 on this message, so a
     // reversing thruster reports magnitude — the sign lives in the commanded direction, which
     // the companion already knows.
+    //
+    // `count` carries PRESENCE (1 = this ESC is sending telemetry, 0 = it is not). Without it
+    // nothing on the wire separates eight healthy thrusters from none: we fill all eight slots
+    // whether or not an ESC is attached, so a companion sees frames arriving, a full array of
+    // 8, and all-zero RPM — which is also what a still, healthy, armed hull looks like.
+    // duburi_ws measured 958 CRC-valid ESC_STATUS frames with NO ESCs attached, every rpm
+    // exactly 0. s.esc_present was already here; it was simply never packed.
     uint8_t  temp[4] = {0};
     uint16_t volt_cv[4] = {0}, curr_ca[4] = {0}, totc[4] = {0}, erpm[4] = {0}, cnt[4] = {0};
-    for (int i = 0; i < 4; ++i) erpm[i] = (uint16_t)abs((int)s.rpm[i]);
+    for (int i = 0; i < 4; ++i) {
+        erpm[i] = (uint16_t)abs((int)s.rpm[i]);
+        cnt[i]  = (uint16_t)((s.esc_present >> i) & 1);
+    }
     mavlink_message_t e1;
     mavlink_msg_esc_telemetry_1_to_4_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &e1,
         temp, volt_cv, curr_ca, totc, erpm, cnt);
     mav::tx(e1);
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 4; ++i) {
         erpm[i] = (4 + i < NUM_THRUSTERS) ? (uint16_t)abs((int)s.rpm[4 + i]) : 0;
+        cnt[i]  = (4 + i < NUM_THRUSTERS)
+                  ? (uint16_t)((s.esc_present >> (4 + i)) & 1) : 0;
+    }
     mavlink_message_t e2;
     mavlink_msg_esc_telemetry_5_to_8_pack(MAV_SYSTEM_ID, MAV_COMPONENT_ID, &e2,
         temp, volt_cv, curr_ca, totc, erpm, cnt);
