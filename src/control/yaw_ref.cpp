@@ -64,9 +64,14 @@ static void setState(State s) {
 
 static float wrapPi(float a) {
     if (!isfinite(a)) return 0.0f;
-    while (a >  (float)M_PI) a -= 2.0f * (float)M_PI;
-    while (a < -(float)M_PI) a += 2.0f * (float)M_PI;
-    return a;
+    // O(1) and bounded. The previous `while (a > PI) a -= 2*PI;` pair was
+    // UNBOUNDED: above 2^28 rad, 2*PI is smaller than one ULP, so `a -= 2*PI`
+    // is a no-op and the loop never terminates -- on the 500 Hz control task.
+    // fmodf also avoids the rounding that repeated subtraction accumulates
+    // (at 1e9 deg the old loop was off by 3.0 rad after 2.8e6 iterations).
+    a = fmodf(a + (float)M_PI, 2.0f * (float)M_PI);
+    if (a < 0.0f) a += 2.0f * (float)M_PI;
+    return a - (float)M_PI;
 }
 
 static void clearAccum() {
