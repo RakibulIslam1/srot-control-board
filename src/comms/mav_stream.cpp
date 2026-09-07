@@ -843,7 +843,14 @@ void update(uint32_t now) {
             sendNamed(now, "AT_TU",    autotune::periodTu());
             sendNamed(now, "AT_OKPCT", autotune::consensusPct());
         }
-        sendNamed(now, "KILL", s.kill ? 1.0f : 0.0f);
+        // SUPPRESS rather than zero. The kill state arrives from the 2nd board over
+        // ESP-NOW, and on link loss espnow_link::poll() returns false by design --
+        // so `s.kill == false` is a DEFAULT, not a reading, and a consumer cannot
+        // tell "power is live" from "nobody is telling us". That was justified as
+        // display-only, but this value goes on the wire and the ground station
+        // re-emits it from the LoRa flags too. Absence is the signal -- the same
+        // rule already applied to SCALED_PRESSURE2 and BATTERY_STATUS id 1 above.
+        if (s.pm2_present) sendNamed(now, "KILL", s.kill ? 1.0f : 0.0f);
         sendNamed(now, "CURR", s.curr);
         // Live pilot gain — the gain buttons change this at runtime, so a joystick UI has
         // no other way to know the current value (JS_GAIN_DEFAULT is only the boot value).
