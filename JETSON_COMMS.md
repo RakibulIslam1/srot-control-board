@@ -78,6 +78,30 @@ m.set_mode(23)   # or command_long DO_SET_MODE with param1=1, param2=23
 arm). Use this for tele-op / manual override; it works in the manual/stabilize modes, not needed for
 AUTO moves.
 
+> ⚠ **`z` DEVIATES FROM THE MAVLink COMMON SPEC, DELIBERATELY — and the failure is
+> silent and downward.** The published definition of `MANUAL_CONTROL.z` is
+> *"Z-axis, normalized to the range [-1000,1000] … Positive values are positive
+> thrust, negative values are negative thrust"* — i.e. **0 is neutral**
+> ([mavlink.io, common.html#MANUAL_CONTROL](https://mavlink.io/en/messages/common.html#MANUAL_CONTROL)).
+>
+> This board uses **0..1000 with 500 neutral**, which is ArduSub's convention, not
+> the spec's: `ArduSub/joystick.cpp` scales throttle with the comment *"Scale
+> 0-1000 to 0-800 times gain"* and computes `throttleBase = 1500 - 500*throttleScale`,
+> so `z = 500` is what lands on RC neutral. `onManualControl` matches it exactly —
+> `constrain(mc.z, 0, 1000)` then `sp_throttle = (z - 500)/500`.
+>
+> **Consequence for anyone integrating a standard GCS:** a spec-literal sender
+> transmitting `z = 0` for "no thrust" is commanding **full descent** here, and
+> nothing in the link or the logs will say so — it is a valid value in range. The
+> whole current fleet already agrees with this board (duburi_ws
+> `srot_protocol.unit_to_mc_z`, and Bondor's `useGamepad.ts` idles at `z: 500`), so
+> this is not a bug report; it is the sentence that stops the next integrator
+> losing an afternoon, or a hull, to it.
+>
+> If you would rather converge on the spec later, the honest migration is to accept
+> BOTH (treat `INT16_MAX` as invalid, negative as spec-style, 0..1000 as legacy)
+> behind a parameter — not to flip the meaning of a value that already flies.
+
 ---
 
 ## 5. High-level moves — `MAV_CMD_SROT_MOVE` (31000) ★
