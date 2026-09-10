@@ -9,7 +9,7 @@ sibling repo; the **Shared invariants** section below is deliberately identical 
 
 The **SROT** control board firmware: an **ESP32** flight core + an **RP2350 Pico** thruster/RPM
 co-processor, for a `vectored_6dof` AUV (8× T200). It speaks **MAVLink 2** as sysid/compid
-**1/1** over **USB serial at 115200**, and owns every real-time control loop at **500 Hz**:
+**1/1** over **USB serial at 1 Mbaud**, and owns every real-time control loop at **500 Hz**:
 attitude, depth, thrust allocation, the timed AUTO primitives, arming and all failsafes.
 
 Read `ARCHITECTURE.md` first, then `ALGORITHMS.md`. `AUDIT.md` is the record of what has
@@ -18,7 +18,7 @@ already gone wrong — read it before assuming a piece of oddly-shaped code is a
 ## Where it sits
 
 ```
-Jetson Orin Nano  ──USB serial 115200──  SROT board  ──1 Mbaud UART──  RP2350 Pico ── 8× ESC
+Jetson Orin Nano  ──USB serial 1 Mbaud──  SROT board  ──1 Mbaud UART──  RP2350 Pico ── 8× ESC
   (duburi_ws:                              (this repo)                   (thruster/RPM)
    ROS 2, YOLO11,
    missions, payload)                          │
@@ -52,7 +52,7 @@ exception is raised, the vehicle just behaves wrong.
 
 1. **The wire constants are frozen unless changed on both sides in the same PR.**
    `MAV_CMD_SROT_MOVE = 31000`; the `SROT_MOVE` p1 type codes and their ordering; the
-   `FlightMode` integers; `PCA_RELAY_BASE_CH = 8`; `MAVLINK_BAUD = 115200`;
+   `FlightMode` integers; `PCA_RELAY_BASE_CH = 8`; `MAVLINK_BAUD = 1000000`;
    `GCS_FAILSAFE_MS = 5000`.
    `duburi_ws` mirrors all of these in `fc/srot_protocol.py` and has a test
    (`test_srot_protocol_drift.py`) that **reads this repo's headers directly** and fails on
