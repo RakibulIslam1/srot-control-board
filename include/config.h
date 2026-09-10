@@ -55,7 +55,17 @@
 #define MAV_SYSTEM_ID           1           // this vehicle's system id
 #define MAV_COMPONENT_ID        1           // MAV_COMP_ID_AUTOPILOT1
 #define MAVLINK_SERIAL          Serial      // UART0 (TX0/RX0) to companion computer / BlueOS
-#define MAVLINK_BAUD            115200
+// 1 Mbaud, not 115200. MEASURED on the vehicle 2026-09-10: the companion's
+// INBOUND half of this link already runs at 5969 B/s of 11520 -- 51.8 % of
+// capacity with the hull idle, disarmed, and nothing being commanded. The
+// remaining 5551 B/s is ~93 LANDING_TARGET frames/s, before the outbound half
+// and before any burst, which is under what the vision uplink needs to be
+// worth having. The bottleneck is the wire, not either CPU.
+// UART0 is a real UART here (this is a classic ESP32; the CH340 clocks it), so
+// baud bounds frame time directly: a 74-byte frame is 6.4 ms at 115200 and
+// 0.8 ms at 1 Mbaud. Both ESP32 UART0 and the CH340 are specified well past
+// this rate, and the 1024-byte RX/TX buffers set in main.cpp are unchanged.
+#define MAVLINK_BAUD            1000000
 
 // -----------------------------------------------------------------------------
 // SECTION 2 — HARDWARE PINS  (strictly mapped to avoid flash/boot conflicts)
