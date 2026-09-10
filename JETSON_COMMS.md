@@ -17,7 +17,7 @@ never runs a per-axis loop and never sends a brake.
 |-----------------|-------------------------------------------------------------|
 | Protocol        | MAVLink 2                                                    |
 | Physical        | ESP32 **UART0** (`Serial`, TX0/RX0) → BlueOS / companion     |
-| Baud            | **115200** (`MAVLINK_BAUD`)                                  |
+| Baud            | **1000000** (`MAVLINK_BAUD`) — was 115200; see config.h |
 | Vehicle sysid   | **1** (`MAV_SYSTEM_ID`)                                      |
 | Autopilot compid| **1** = `MAV_COMP_ID_AUTOPILOT1` (`MAV_COMPONENT_ID`)        |
 | GCS failsafe    | No GCS `HEARTBEAT` for **5 s** (`GCS_FAILSAFE_MS = 5000`) → failsafe (surface) |
