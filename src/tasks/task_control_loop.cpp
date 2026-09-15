@@ -117,7 +117,15 @@ static void readInputs(LoopIn& in) {
             in.imu_ok   = s.imu_valid;
             in.imu_ever_valid = s.imu_ever_valid;
             in.grav_x = s.gravity.x; in.grav_y = s.gravity.y; in.grav_z = s.gravity.z;
+            // lin_accel is in the BNO's SENSOR axes: bno085.cpp remaps attitude and
+            // gyro under BNO_SWAP_ROLL_PITCH, not gravity or linear accel. Vehicle
+            // FRD from sensor is (x, y, z) -> (y, x, -z), so surge is sensor y.
+            // Measured 2026-09-15: at pitch -15.1 deg the tilt lands on sensor y.
+#if BNO_SWAP_ROLL_PITCH
+            in.lin_ax = s.lin_accel.y; in.lin_ay = s.lin_accel.x;
+#else
             in.lin_ax = s.lin_accel.x; in.lin_ay = s.lin_accel.y;
+#endif
             in.mx = s.mag.x; in.my = s.mag.y; in.mz = s.mag.z;
             in.pressure = s.pressure_mbar;
             in.leak = s.leak; in.pm1 = s.pm1_voltage;

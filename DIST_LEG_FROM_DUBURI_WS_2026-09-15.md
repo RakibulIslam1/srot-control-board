@@ -109,3 +109,16 @@ It is a separate PR so this one stays reviewable.
 - **#18 (LANDING_TARGET stage 1)**: independent. On-board de-rotation of the bearing is
   a separate PR that builds on #18.
 - **#8 (false complete)**: DIST reports FAILED, not ACCEPTED, when it stops short.
+
+## Update: the accel axes (measured after opening)
+
+`lin_accel` and `gravity` come out of `bno085.cpp` in the sensor's axes; only
+attitude and gyro get the `BNO_SWAP_ROLL_PITCH` remap. On the vehicle at roll
++1.57, pitch -15.10 deg, SCALED_IMU2 (built from `lx + grx`) read
+(-0.41, -2.56, +9.38) m/s^2 against an FRD prediction of (-2.54, -0.26, -9.47):
+the prediction under (x, y, z) -> (y, x, -z). The DIST leg now takes surge from
+sensor y and sway from sensor x under that flag. Without it the leg predicted
+with the wrong axis and would have fallen back to velocity-only on the fault
+guard. Separately worth your call: remapping gravity and linear accel in the
+driver, next to the gyro remap, would make SCALED_IMU2 self-consistent. The
+companion now proves the accel frame at runtime, so either state is safe for us.
