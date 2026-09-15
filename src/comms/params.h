@@ -119,6 +119,9 @@ struct Params {
     float move_accel;       // MOVE_ACCEL       speed ramp per second (smooth start/stop)
     float move_brake_gain;  // MOVE_BRAKE_GAIN  reverse-thrust fraction during braking
     float move_brake_k;     // MOVE_BRAKE_K     brake time (s) per unit cruise speed
+    // DIST leg (control/dist_leg). Tunable at the pool: the bake-off fixed the structure,
+    // the water fixes the numbers.
+    float dist_kp_pos, dist_a_dec, dist_v_max, dist_ff, dist_kp_v, dist_ki_v;
     float move_depth_rate;  // MOVE_DEPTH_RATE  smooth dive rate (m/s target ramp — no splash)
     float move_yaw_rate;    // MOVE_YAW_RATE    default turn rate (deg/s)
     // ArduSub motor-config params QGC's Motors page reads (informational — our

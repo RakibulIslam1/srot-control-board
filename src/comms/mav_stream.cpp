@@ -46,7 +46,9 @@ struct Snap {
     bool     mv_active = false;
     uint8_t  mv_type = 0, mv_state = 0, mv_src_sys = 0, mv_src_comp = 0;
     float    mv_progress = 0;
-    uint32_t mv_seq = 0, mv_done_seq = 0;
+    uint32_t mv_seq = 0, mv_done_seq = 0, mv_failed_seq = 0;
+    float    mv_remain = 0;
+    bool     mv_accel_ok = true;
 };
 
 static void snapshot(Snap& s) {
@@ -81,6 +83,7 @@ static void snapshot(Snap& s) {
             s.mv_active = c.mv_active; s.mv_type = c.mv_type; s.mv_state = c.mv_state;
             s.mv_progress = c.mv_progress;
             s.mv_seq = c.mv_seq; s.mv_done_seq = c.mv_done_seq;
+            s.mv_failed_seq = c.mv_failed_seq; s.mv_remain = c.mv_remain; s.mv_accel_ok = c.mv_accel_ok;
             s.mv_src_sys = c.mv_src_sys; s.mv_src_comp = c.mv_src_comp;
         }
     }
@@ -620,11 +623,29 @@ static void updateMove(const Snap& s, uint32_t now) {
         return;
     }
 
+    // Checked BEFORE done: a refused DIST leg also goes inactive, and the falling edge must
+    // not read as a completion.
+    if (s.mv_failed_seq == s_seq) {
+        sendMoveAck(s, MAV_RESULT_FAILED, 0);
+        mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                                   "DIST refused: no fresh companion velocity");
+        sendNamed(now, "MV_STATE", 0);
+        sendNamed(now, "MV_REMAIN", s.mv_remain);
+        s_resolved = true;
+        return;
+    }
     bool done = (s.mv_done_seq == s_seq) || (s_seen_active && !s.mv_active);
     if (done) {
         sendMoveAck(s, MAV_RESULT_ACCEPTED, 100);
         sendNamed(now, "MV_STATE", 0);
         sendNamed(now, "MV_PROG",  1.0f);
+        if (s.mv_type == 11) {                         // DIST: the residual, and how it was measured
+            sendNamed(now, "MV_REMAIN", s.mv_remain);
+            sendNamed(now, "DIST_ACCOK", s.mv_accel_ok ? 1.0f : 0.0f);
+            if (!s.mv_accel_ok)
+                mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
+                    "DIST done velocity-only: accel axis rejected, check lin_accel sign");
+        }
         s_resolved = true;
         return;
     }
@@ -635,6 +656,7 @@ static void updateMove(const Snap& s, uint32_t now) {
         sendNamed(now, "MV_STATE", (float)s.mv_state);
         sendNamed(now, "MV_PROG",  s.mv_progress);
         sendNamed(now, "MV_TYPE",  (float)s.mv_type);
+        if (s.mv_type == 11) sendNamed(now, "MV_REMAIN", s.mv_remain);
     }
 }
 

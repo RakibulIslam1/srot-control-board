@@ -243,12 +243,13 @@ The `p1` wire type is **not** the internal `movement::Type` — the board adds 1
 | 7 | HOLD | 8 |
 | 8 | STYLE | 9 |
 | 9 | ARC | 10 |
+| 10 | DIST | 11 |
 
-Anything outside 0..9 is `DENIED`.
+Anything outside 0..10 is `DENIED`.
 
 | `Move.action` goal field | SROT | Note |
 |---|---|---|
-| `cmd` ("forward", "turn", …) | p1 wire type 0..9 | `COMMANDS` registry maps the verb string |
+| `cmd` ("forward", "turn", …) | p1 wire type 0..10 | `COMMANDS` registry maps the verb string |
 | `duration` | p2 (translation/arc/hold) | seconds |
 | `target` (heading) | p2 with p4=1 | absolute-shortest-path turn |
 | `gain` | p3 | 0..1 speed, or deg/s for turn |

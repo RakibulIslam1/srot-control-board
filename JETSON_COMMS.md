@@ -110,10 +110,11 @@ heading- and depth-hold are all on the ESP32.
 | 7  | **hold**    | seconds (0 = until timeout) | —  | —  (station-keep: zero translation, hold depth + heading) |
 | 8  | **style**   | count of 360° rolls | —          | —  (always ROLL at 90°/s) |
 | 9  | **arc**     | duration_s    | forward speed 0..1 | signed yaw rate deg/s |
+| 10 | **dist**    | signed metres | speed cap 0..1     | p4 axis: 0 surge / 1 sway (p5 timeout). Needs a fresh `VISION_SPEED_ESTIMATE`; FAILED if absent, stale mid-leg, or out of time. Telemetry `MV_REMAIN`, `DIST_ACCOK`. |
 
 > **Wire type vs internal enum.** p1 is the *wire* code above (0-based). The firmware stores
 > `movement::Type = p1 + 1`, and **`MV_TYPE` reports that internal enum**, not p1. So a `forward`
-> (p1 = 0) shows up as `MV_TYPE = 1`. Any p1 outside 0..9 is rejected with `MAV_RESULT_DENIED`.
+> (p1 = 0) shows up as `MV_TYPE = 1`. Any p1 outside 0..10 is rejected with `MAV_RESULT_DENIED`.
 
 **Turn modes:** relative (`p4=0`) turns ±`p2`° from the current heading; absolute (`p4=1`) drives to
 heading `p2` (0–360°) taking the **shortest** direction — this is the same yaw you read on the BNO /

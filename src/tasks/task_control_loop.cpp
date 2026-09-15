@@ -59,6 +59,8 @@ struct LoopIn {
     // AUTO-mode move command (from Task_MAVLink)
     uint8_t    mv_type; float mv_primary, mv_speed, mv_aux; uint8_t mv_submode; float mv_timeout;
     uint32_t   mv_seq;
+    float      vel_x, vel_y; uint32_t vel_stamp_ms;   // companion velocity (DIST)
+    float      lin_ax, lin_ay;                                   // BNO accel, gravity removed
 };
 
 static void readInputs(LoopIn& in) {
@@ -76,6 +78,7 @@ static void readInputs(LoopIn& in) {
             in.mv_type = c.mv_type; in.mv_primary = c.mv_primary; in.mv_speed = c.mv_speed;
             in.mv_aux = c.mv_aux; in.mv_submode = c.mv_submode; in.mv_timeout = c.mv_timeout;
             in.mv_seq = c.mv_seq;
+            in.vel_x = c.vel_x; in.vel_y = c.vel_y; in.vel_stamp_ms = c.vel_stamp_ms;
 
             // Age out the pilot sticks. Applied HERE, once, so every mode downstream sees
             // decayed intent without needing to know about it — rather than adding a
@@ -113,6 +116,7 @@ static void readInputs(LoopIn& in) {
             in.imu_ok   = s.imu_valid;
             in.imu_ever_valid = s.imu_ever_valid;
             in.grav_x = s.gravity.x; in.grav_y = s.gravity.y; in.grav_z = s.gravity.z;
+            in.lin_ax = s.lin_accel.x; in.lin_ay = s.lin_accel.y;
             in.mx = s.mag.x; in.my = s.mag.y; in.mz = s.mag.z;
             in.pressure = s.pressure_mbar;
             in.leak = s.leak; in.pm1 = s.pm1_voltage;
@@ -225,6 +229,8 @@ static void computeDemands(const LoopIn& in, float dt,
             // Jetson-offloaded movement: heading + smoothed depth hold, translation/turn from
             // the movement primitive (which brakes on-board). STYLE spins via the demand directly.
             bool running = false;
+            movement::feedVelocity(in.vel_x, in.vel_y, in.vel_stamp_ms);
+            movement::feedAccel(in.lin_ax, in.lin_ay);
             movement::Demand md = movement::update(in.roll, in.pitch, in.yaw,
                                                    in.gx, in.gy, in.gz, in.depth, in.rpm, dt, running);
             if (md.spin) {
@@ -498,6 +504,13 @@ void Task_ControlLoop(void* pv) {
             movement::start((movement::Type)in.mv_type, in.mv_primary, in.mv_speed,
                             in.mv_submode, in.mv_aux, in.mv_timeout, in.yaw, in.depth);
             prev_mv_seq = in.mv_seq;
+            // A DIST leg with no fresh velocity refuses INSIDE start() and never becomes
+            // active, so no falling edge will ever latch it done. Latch the refusal here or
+            // the companion waits on IN_PROGRESS for ever.
+            if (movement::failed()) {
+                StateLock flk(g_state.mtx_control, pdMS_TO_TICKS(2));
+                if (flk.ok()) g_state.control.mv_failed_seq = prev_mv_seq;
+            }
         }
 
         // Tune modes. AUTOTUNE = flight-loop relay tune (ATUNE param also triggers it).
@@ -942,7 +955,14 @@ void Task_ControlLoop(void* pv) {
                 g_state.control.mv_active   = now_active;
                 g_state.control.mv_state    = movement::phase();
                 g_state.control.mv_progress = movement::progress();
-                if (mv_was_active && !now_active) g_state.control.mv_done_seq = prev_mv_seq;  // completed
+                g_state.control.mv_remain   = movement::remaining();
+                g_state.control.mv_accel_ok = movement::accelTrusted();
+                if (mv_was_active && !now_active) {
+                    // A leg that braked because its feed went stale ENDED, but did not
+                    // complete: report it as the refusal it is, never ACCEPTED at 100 %.
+                    if (movement::failed()) g_state.control.mv_failed_seq = prev_mv_seq;
+                    else                    g_state.control.mv_done_seq = prev_mv_seq;  // completed
+                }
             }
             // Only advance the edge tracker when the write landed. On a lock miss the state
             // was not published, so clearing mv_was_active here would drop the completion.

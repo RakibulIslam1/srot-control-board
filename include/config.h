@@ -639,6 +639,26 @@
 // normal use — it engages exactly when the sender has stopped.
 #define MANUAL_FRESH_MS         1000
 #define MANUAL_DECAY_MS         1500
+// Companion velocity (VISION_SPEED_ESTIMATE, 103) for the DIST leg. The companion sends at
+// 10-25 Hz; 400 ms is several missed updates. Past it the leg brakes and FAILS rather than
+// integrate a held velocity -- a held velocity adds metres that were never travelled.
+#define DIST_VEL_STALE_MS       400
+#define DIST_TOL_M              0.03f       // done when |remaining| is under this ...
+#define DIST_V_SETTLE           0.03f       // ... and |velocity| under this ...
+#define DIST_SETTLE_MS          400         // ... for this long
+#define DIST_Q_V                0.05f       // KF velocity random walk (m/s/sqrt s)
+#define DIST_Q_B                0.002f      // KF accel-bias random walk (m/s^2/sqrt s)
+#define DIST_GATE_SIGMA2        16.0f       // velocity innovation gate: 4 sigma
+#define DIST_VEL_VAR            0.0004f     // companion velocity variance (0.02 m/s)
+#define DIST_ACCEL_DISTRUST     5           // consecutive gate rejections -> stop using accel
+#define DEF_DIST_KP_POS         1.2f        // 1/s   position error -> velocity reference
+#define DEF_DIST_A_DEC          0.25f       // m/s^2 stopping profile sqrt(2*a*|e|)
+#define DEF_DIST_V_MAX          0.50f       // m/s   velocity reference cap
+#define DEF_DIST_FF             1.0f        // demand per m/s of reference (hull gain ~1)
+#define DEF_DIST_KP_V           1.2f        // demand per m/s of velocity error
+#define DEF_DIST_KI_V           0.6f        // integral: rejects a current
+#define DIST_MAX_M              20.0f       // a pool is 25 m; anything larger is a wire bug
+#define DIST_VEL_MAX_MPS        3.0f        // plausibility bound on an ingested velocity
 // Failsafe end state. A SURFACE failsafe does not disarm, so without this the vehicle sits
 // armed and station-keeping at 0 m for ever after a permanent link loss. Disarm once the
 // depth has stayed above FS_SURFACE_DEPTH_M continuously for FS_SURFACE_HOLD_MS — the hold

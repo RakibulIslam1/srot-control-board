@@ -222,6 +222,12 @@ static const Desc SCALARS[] = {
     { "MOVE_ACCEL",     "MOVE_ACCEL",     &g_params.move_accel,     DEF_MOVE_ACCEL },
     { "MOVE_BRAKE_GAIN","MOVE_BRAKE_GN",  &g_params.move_brake_gain,DEF_MOVE_BRAKE_GAIN },
     { "MOVE_BRAKE_K",   "MOVE_BRAKE_K",   &g_params.move_brake_k,   DEF_MOVE_BRAKE_K },
+    { "DIST_KP_POS",    "DIST_KP_POS",    &g_params.dist_kp_pos,    DEF_DIST_KP_POS },
+    { "DIST_A_DEC",     "DIST_A_DEC",     &g_params.dist_a_dec,     DEF_DIST_A_DEC },
+    { "DIST_V_MAX",     "DIST_V_MAX",     &g_params.dist_v_max,     DEF_DIST_V_MAX },
+    { "DIST_FF",        "DIST_FF",        &g_params.dist_ff,        DEF_DIST_FF },
+    { "DIST_KP_V",      "DIST_KP_V",      &g_params.dist_kp_v,      DEF_DIST_KP_V },
+    { "DIST_KI_V",      "DIST_KI_V",      &g_params.dist_ki_v,      DEF_DIST_KI_V },
     { "MOVE_DEPTH_RATE","MOVE_DEPTH_RT",  &g_params.move_depth_rate,DEF_MOVE_DEPTH_RATE },
     { "MOVE_YAW_RATE",  "MOVE_YAW_RATE",  &g_params.move_yaw_rate,  DEF_MOVE_YAW_RATE },
     // ArduSub-standard motor-reverse names so QGC's Motors page reads them (and no
