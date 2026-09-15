@@ -167,6 +167,12 @@ tuned, treat "duration × speed" as repeatable only at a **constant** state of c
 | `MOVE_ACCEL` | 2.5 | Translation speed ramp (/s) — smooth start, no lurch. |
 | `MOVE_BRAKE_GAIN` | 0.55 | Reverse-thrust fraction during the on-board brake. |
 | `MOVE_BRAKE_K` | 0.60 | Brake duration = K·cruise-speed (s) → stops with no drift. |
+| `DIST_KP_POS` | 1.2 | DIST leg: position error (m) → velocity reference (m/s). |
+| `DIST_A_DEC` | 0.25 | DIST leg: stopping profile `sqrt(2·a·|e|)` (m/s²). Lower = earlier, gentler stop. |
+| `DIST_V_MAX` | 0.50 | DIST leg: velocity reference cap (m/s). |
+| `DIST_FF` | 1.0 | DIST leg: demand per m/s of reference (≈ 1 / hull speed at full demand). |
+| `DIST_KP_V` | 1.2 | DIST leg: demand per m/s of velocity error. |
+| `DIST_KI_V` | 0.6 | DIST leg: velocity integral — rejects a current. Conditional-integration anti-windup. |
 | `MOVE_DEPTH_RATE` | 0.20 | Smooth dive/ascend rate (m/s) — no splash. |
 | `MOVE_YAW_RATE` | 45 | Default turn rate (deg/s) when the command's rate = 0. |
 

@@ -186,6 +186,14 @@ struct ControlState {
     float       mv_progress = 0;     // 0..1
     bool        mv_active = false;
     uint32_t    mv_done_seq = 0;     // set to mv_seq when that command finishes (→ ACCEPTED ACK)
+    uint32_t    mv_failed_seq = 0;   // set to mv_seq when that command REFUSED (→ FAILED ACK)
+    float       mv_remain = 0;       // DIST: signed metres still to go (telemetry MV_REMAIN)
+    bool        mv_accel_ok = true;  // DIST: false once the accelerometer was rejected (DIST_ACCOK)
+
+    // Companion body velocity over ground (VISION_SPEED_ESTIMATE). value + stamp, the same
+    // pair sp_stamp_ms gives the sticks. vel_stamp_ms = millis() AT RECEIPT, 0 = never.
+    float       vel_x = 0, vel_y = 0;
+    uint32_t    vel_stamp_ms = 0;
 };
 
 // -----------------------------------------------------------------------------

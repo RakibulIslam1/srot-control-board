@@ -320,11 +320,11 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
             return MAV_RESULT_ACCEPTED;
 
         case MAV_CMD_SROT_MOVE: {
-            // High-level Jetson move. p1=type(0..9) p2=primary p3=speed|yawrate
+            // High-level Jetson move. p1=type(0..10) p2=primary p3=speed|yawrate
             //   p4=turn submode | arc yawrate  p5=timeout_s. Auto-enters AUTO; preempts.
             //   Braking is on-board. See docs/JETSON_COMMS.md.  (wire type + 1 = movement::Type)
             int wire = (int)p[0];
-            if (wire < 0 || wire > 9) return MAV_RESULT_DENIED;
+            if (wire < 0 || wire > 10) return MAV_RESULT_DENIED;   // 10 = DIST
             {
                 // MUST BE ARMED. The movement state machine advances on its own profile and
                 // does not consult the arm state, so a move commanded while disarmed runs the
@@ -733,6 +733,31 @@ static void onManualControl(const mavlink_message_t& msg) {
     s_prev_buttons = mc.buttons;
 }
 
+// VISION_SPEED_ESTIMATE (103): the companion's body velocity over ground, for the DIST leg.
+//
+// ⛔ THIS IS A THIRD ENTRY POINT PAST THE isfinite() SWEEP. That guard runs in the COMMAND path
+// only (COMMAND_LONG/INT). A NaN velocity integrated into a distance is unbounded, and NaN fails
+// every comparison silently -- the staleness test reads "fresh", the bound reads "in range" --
+// so every field consumed is checked here, and a message failing any check is dropped whole.
+//
+// FRAME: body FRD (x forward, y right). The MAVLink spec names a local frame for 103; this is
+// the companion contract (DUBURI_WS_DIST_LEG doc). usec is the estimate's instant on THIS
+// board's clock; it is NOT used for delay compensation, which measured worse (dist_leg.h).
+static void onVisionSpeedEstimate(const mavlink_message_t& msg) {
+    mavlink_vision_speed_estimate_t v;
+    mavlink_msg_vision_speed_estimate_decode(&msg, &v);
+    if (!isfinite(v.x) || !isfinite(v.y)) return;
+    // covariance[0] NaN = "unknown" per MAVLink; a non-positive variance is not a measurement.
+    if (!isfinite(v.covariance[0]) || !isfinite(v.covariance[4]) ||
+        v.covariance[0] <= 0.0f || v.covariance[4] <= 0.0f) return;
+    if (fabsf(v.x) > DIST_VEL_MAX_MPS || fabsf(v.y) > DIST_VEL_MAX_MPS) return;
+    StateLock lk(g_state.mtx_control);
+    if (!lk.ok()) return;
+    g_state.control.vel_x = v.x;
+    g_state.control.vel_y = v.y;
+    g_state.control.vel_stamp_ms = millis();
+}
+
 static void onSetMode(const mavlink_message_t& msg) {
     mavlink_set_mode_t sm;
     mavlink_msg_set_mode_decode(&msg, &sm);
@@ -781,6 +806,9 @@ void handle(const mavlink_message_t& msg) {
             break;
         case MAVLINK_MSG_ID_MANUAL_CONTROL:
             onManualControl(msg);
+            break;
+        case MAVLINK_MSG_ID_VISION_SPEED_ESTIMATE:
+            onVisionSpeedEstimate(msg);
             break;
         default:
             break;

@@ -23,7 +23,12 @@
 namespace movement {
 
 enum class Type : uint8_t {
-    NONE = 0, FWD, BACK, LEFT, RIGHT, TURN, DIVE, STOP, HOLD, STYLE, ARC
+    NONE = 0, FWD, BACK, LEFT, RIGHT, TURN, DIVE, STOP, HOLD, STYLE, ARC,
+    // DIST: translate a MEASURED distance (estimator + cascaded PID in control/dist_leg). Wire type 10 (wire + 1 = Type, mav_commands.cpp).
+    // `primary` = signed metres, `speed` = 0..1 cap, `submode` 0 = surge / 1 = sway.
+    // Distance is the integral of the companion's ingested body velocity
+    // (VISION_SPEED_ESTIMATE, see feedVelocity) from the instant the leg starts.
+    DIST
 };
 
 // Demand produced each control cycle.
@@ -51,6 +56,21 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
            float timeout_s, float cur_yaw, float cur_depth);
 
 void abort();   // brake→stop the current command (preemption / safety)
+
+// The companion's latest body-frame velocity over ground (m/s, x forward / y right) and
+// millis() AT RECEIPT. Called by the control loop every cycle BEFORE update(), from the
+// value+stamp pair the MAVLink task stored. rx_ms = 0 means never received.
+void feedVelocity(float vx, float vy, uint32_t rx_ms);
+// Gravity-removed body acceleration (m/s^2) from the BNO, every cycle. Drives the DIST
+// estimator between velocity updates.
+void feedAccel(float ax, float ay);
+
+// True for the one command that ended by REFUSING rather than completing -- a DIST leg
+// whose velocity feed was absent at start or went stale mid-leg. Latched until the next
+// start(). The control loop publishes it so the ACK is FAILED, never ACCEPTED at 100 %.
+bool  failed();
+float remaining();   // DIST: signed metres still to go (0 for every other type)
+bool  accelTrusted();   // DIST: false once the leg fell back to velocity-only
 
 // Force the command to its IDLE terminal state immediately, with no brake phase.
 //
