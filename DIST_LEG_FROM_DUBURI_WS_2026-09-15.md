@@ -122,3 +122,22 @@ with the wrong axis and would have fallen back to velocity-only on the fault
 guard. Separately worth your call: remapping gravity and linear accel in the
 driver, next to the gyro remap, would make SCALED_IMU2 self-consistent. The
 companion now proves the accel frame at runtime, so either state is safe for us.
+
+## Update: companion position, stage 1 (accept, store, echo; actuate nothing)
+
+`VISION_POSITION_ESTIMATE` (102) is now accepted. The companion sends its fused pose from our
+invariant filter:
+- NED metres; yaw in radians;
+- the upper-triangle covariance;
+- `reset_counter`, bumped on a frame change or a prop-fix jump;
+- stamped on the board clock.
+
+The handler refuses non-finite fields, a non-positive xx or yy variance, and any axis beyond
+`VPOS_MAX_M` (100 m). It stores the pose in `ControlState.pos_*` and counts messages.
+
+**Nothing reads the stored pose.** The telemetry burst echoes `VPOS_N`, `VPOS_RST` and
+`VPOS_AGE` (ms), and only after the first message arrives. A host that never enables the feed
+costs no bandwidth. This is the same echo-before-actuation rule as #18: we confirm the board
+holds what we sent before any loop may use it.
+
+Build: RAM 24.5 %, flash 29.8 % (unchanged to the tenth).
