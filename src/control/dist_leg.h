@@ -9,10 +9,9 @@
 //  ⛔ NOT DELAY-COMPENSATED, ON MEASUREMENT. The obvious improvement -- form the innovation
 //  against the velocity believed at the CAPTURE instant (Larsen et al. 1998) -- was built,
 //  and it made things WORSE: with a 250 ms feed it settled 31/54 runs against 51/54 without,
-//  and at 400 ms 11/54 against 30/54. The innovation is taken in the past but the gain and
-//  covariance are the present's, and on a hull that is accelerating that mismatch costs more
-//  than the lag it removes. A full state replay might win; it was not worth 2.6 kB of RAM on
-//  a guess. See bakeoff/probe results in duburi_ws bumblebee-study/rounds/dist_leg.
+//  and at 400 ms 11/54 against 30/54. That is the measurement. The CAUSE is not verified; the
+//  likeliest is that the innovation is taken in the past while the gain and covariance are
+//  the present's. A full state replay might win; it was not worth 2.6 kB of RAM on a guess. See bakeoff/probe results in duburi_ws bumblebee-study/rounds/dist_leg.
 //
 //  CONTROL: cascaded. Position error -> velocity reference, the least of the speed cap, the
 //  stopping profile sqrt(2*a*|e|) and a proportional term; then a velocity PI with

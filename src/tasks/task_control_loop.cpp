@@ -59,7 +59,7 @@ struct LoopIn {
     // AUTO-mode move command (from Task_MAVLink)
     uint8_t    mv_type; float mv_primary, mv_speed, mv_aux; uint8_t mv_submode; float mv_timeout;
     uint32_t   mv_seq;
-    float      vel_x, vel_y; uint32_t vel_stamp_ms;   // companion velocity (DIST)
+    float      vel_x, vel_y, vel_var_x, vel_var_y; uint32_t vel_stamp_ms;   // companion velocity (DIST)
     float      lin_ax, lin_ay;                                   // BNO accel, gravity removed
 };
 
@@ -79,6 +79,7 @@ static void readInputs(LoopIn& in) {
             in.mv_aux = c.mv_aux; in.mv_submode = c.mv_submode; in.mv_timeout = c.mv_timeout;
             in.mv_seq = c.mv_seq;
             in.vel_x = c.vel_x; in.vel_y = c.vel_y; in.vel_stamp_ms = c.vel_stamp_ms;
+            in.vel_var_x = c.vel_var_x; in.vel_var_y = c.vel_var_y;
 
             // Age out the pilot sticks. Applied HERE, once, so every mode downstream sees
             // decayed intent without needing to know about it — rather than adding a
@@ -229,7 +230,7 @@ static void computeDemands(const LoopIn& in, float dt,
             // Jetson-offloaded movement: heading + smoothed depth hold, translation/turn from
             // the movement primitive (which brakes on-board). STYLE spins via the demand directly.
             bool running = false;
-            movement::feedVelocity(in.vel_x, in.vel_y, in.vel_stamp_ms);
+            movement::feedVelocity(in.vel_x, in.vel_y, in.vel_var_x, in.vel_var_y, in.vel_stamp_ms);
             movement::feedAccel(in.lin_ax, in.lin_ay);
             movement::Demand md = movement::update(in.roll, in.pitch, in.yaw,
                                                    in.gx, in.gy, in.gz, in.depth, in.rpm, dt, running);

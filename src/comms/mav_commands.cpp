@@ -755,6 +755,8 @@ static void onVisionSpeedEstimate(const mavlink_message_t& msg) {
     if (!lk.ok()) return;
     g_state.control.vel_x = v.x;
     g_state.control.vel_y = v.y;
+    g_state.control.vel_var_x = v.covariance[0];
+    g_state.control.vel_var_y = v.covariance[4];
     g_state.control.vel_stamp_ms = millis();
 }
 

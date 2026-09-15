@@ -193,6 +193,7 @@ struct ControlState {
     // Companion body velocity over ground (VISION_SPEED_ESTIMATE). value + stamp, the same
     // pair sp_stamp_ms gives the sticks. vel_stamp_ms = millis() AT RECEIPT, 0 = never.
     float       vel_x = 0, vel_y = 0;
+    float       vel_var_x = 0, vel_var_y = 0;   // the sender's own variances (m^2/s^2)
     uint32_t    vel_stamp_ms = 0;
 };
 

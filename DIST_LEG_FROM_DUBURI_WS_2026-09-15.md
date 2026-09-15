@@ -24,9 +24,11 @@ host trying to close it through a 115200 link with 35 ms p2p arrival jitter.
   non-positive variances and |v| > 3 m/s are all dropped.
 - **`SROT_MOVE` wire type 10 = `Type::DIST`** (enum 11, per `wire + 1`). The bound is now
   `wire > 10`. Parameters: p2 = signed metres, p3 = speed cap, p4 = 0 surge / 1 sway,
-  p5 = timeout.
+  p5 = timeout. p2 is covered by the existing `isfinite()` sweep (COMMAND_LONG path,
+  `mav_commands.cpp:290-295`), so a NaN distance is DENIED before `start()`.
 - **`control/dist_leg`**: a 1-D Kalman filter [p, v, accel bias] along the leg axis.
-  - It predicts every cycle with the BNO `lin_accel` and corrects on each companion velocity.
+  - It predicts every cycle with the BNO `lin_accel` and corrects on each companion velocity,
+    weighted by **the sender's own variance** (floored at 0.01 m/s).
   - Control is cascaded: `v_ref = min(v_max, sqrt(2·a·|e|), kp·|e|)`, then a velocity PI with
     feed-forward and conditional-integration anti-windup.
   - Six gains are parameters (`PARAMETERS.md`).
@@ -67,7 +69,7 @@ of the others on the same feed. That is why this is a PID and not something fanc
 **Two things were built and REMOVED on measurement:**
 1. **Delay compensation** (Larsen 1998, innovation against the belief at capture time) made
    things worse. With a 250 ms feed it settled 31/54 runs against 51/54 without it. It also
-   cost 2.6 kB of RAM.
+   cost 2.6 kB of RAM. The cause is a hypothesis (past innovation, present gain), not verified.
 2. **A zero-command band near the goal** did nothing: the reversals happen on the approach.
 
 **Guards that carry load, each proven by removing it:**
@@ -95,3 +97,15 @@ instant on **your** clock (`time_usec`, flagged `z = 1`), so it is ready when #1
 It is a separate PR so this one stays reviewable.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+## How this sits with the open PRs
+
+- **#11 (OPTICAL_FLOW_RAD ingest) and #22 (thruster as velocity sensor)** are other
+  velocity sources. This PR takes velocity from `VISION_SPEED_ESTIMATE` (103) only,
+  weighted by its own variance. If either lands, it feeds the same `correct()` call; no
+  second filter is needed.
+- **#15 (AUTO never exits)**: DIST enters AUTO like every other move, so it inherits that
+  defect and that fix. Nothing here depends on the fix.
+- **#18 (LANDING_TARGET stage 1)**: independent. On-board de-rotation of the bearing is
+  a separate PR that builds on #18.
+- **#8 (false complete)**: DIST reports FAILED, not ACCEPTED, when it stops short.

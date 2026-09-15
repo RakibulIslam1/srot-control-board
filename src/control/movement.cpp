@@ -33,7 +33,7 @@ static bool     s_running = false;
 // fails, because an accel-only estimate drifts and nothing would say so.
 static bool     s_dist = false, s_failed = false;
 static float    s_dist_sign = 1.0f;             // +1 / -1 along the leg axis
-static float    s_vx = 0, s_vy = 0, s_ax = 0, s_ay = 0;
+static float    s_vx = 0, s_vy = 0, s_vvx = 0, s_vvy = 0, s_ax = 0, s_ay = 0;
 static uint32_t s_vel_rx_ms = 0, s_vel_used_rx = 0;
 static bool     s_sway = false;
 
@@ -62,8 +62,8 @@ static float pilotYawRate() {
     return (r > 1.0f) ? r : DEF_PILOT_YAW_RATE;
 }
 
-void feedVelocity(float vx, float vy, uint32_t rx_ms) {
-    s_vx = vx; s_vy = vy; s_vel_rx_ms = rx_ms;
+void feedVelocity(float vx, float vy, float var_x, float var_y, uint32_t rx_ms) {
+    s_vx = vx; s_vy = vy; s_vvx = var_x; s_vvy = var_y; s_vel_rx_ms = rx_ms;
 }
 void feedAccel(float ax, float ay) { s_ax = ax; s_ay = ay; }
 
@@ -231,7 +231,11 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
         dist_leg::predict(s_dist_sign * (s_sway ? s_ay : s_ax), dt);
         if (s_vel_rx_ms != s_vel_used_rx) {           // a new companion velocity arrived
             s_vel_used_rx = s_vel_rx_ms;
-            dist_leg::correct(s_dist_sign * (s_sway ? s_vy : s_vx), DIST_VEL_VAR);
+            // The SENDER's variance: a velocity over a textured floor and one over a bare
+            // patch do not deserve equal weight. Floored so a tiny one cannot pin the filter.
+            const float var = s_sway ? s_vvy : s_vvx;
+            dist_leg::correct(s_dist_sign * (s_sway ? s_vy : s_vx),
+                              (var > DIST_VEL_VAR_MIN) ? var : DIST_VEL_VAR_MIN);
         }
         s_remain = dist_leg::remaining();
     }
