@@ -6,6 +6,7 @@
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
 #include "comms/params.h"            // g_params.leak_en — the LEAK health bit's "enabled" state
+#include "comms/flare_order.h"       // FLARE_* — the latched run order, absent until one arrives
 #include "control/depth_control.h"   // preview()/lastError() — depth-loop observability
 #include "control/mixer.h"           // mix() is pure — preview the depth chain disarmed
 #include "control/yaw_ref.h"         // state() — is the heading absolute or boot-relative?
@@ -869,6 +870,17 @@ void update(uint32_t now) {
         // 0 IDLE, 1 SAMPLING, 2 LOCKED, 3 REFUSED_CAL, 4 REFUSED_FIELD, 5 REFUSED_NOISE.
         // Only 2 means the heading is absolute.
         sendNamed(now, "YAW_REF", (float)yaw_ref::state());
+        // FLARE_* only once an order has been latched. Silence before that is the signal:
+        // publishing 0 would be a value the host has to know to distrust.
+        {
+            uint32_t digits, stamp_ms;
+            uint16_t nonce;
+            if (flare_order::get(digits, nonce, stamp_ms)) {
+                sendNamed(now, "FLARE_ORD", (float)digits);
+                sendNamed(now, "FLARE_NON", (float)nonce);
+                sendNamed(now, "FLARE_AGE", (float)(millis() - stamp_ms) / 1000.0f);
+            }
+        }
         // Baro peak-to-peak over the jitter window. Published unconditionally (NOT gated on
         // depth_ok) because its whole job is to explain WHY depth just withdrew -- gating it
         // on the health it reports on would hide it exactly when it matters.

@@ -6,6 +6,7 @@
 #include "comms/mav_stream.h"
 #include "comms/params.h"
 #include "comms/mission.h"
+#include "comms/flare_order.h"
 #include "control/arming.h"
 #include "control/calibration.h"
 #include "control/movement.h"
@@ -573,6 +574,22 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
         case MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES:
             mav_stream::sendAutopilotVersion();
             return MAV_RESULT_ACCEPTED;
+
+        case MAV_CMD_SROT_FLARE_ORDER: {
+            // Accepted armed or disarmed: it stores a sequence and actuates nothing. Arrives
+            // over LoRa from the ground station during a run; see comms/flare_order.h.
+            const uint32_t digits = flare_order::pack(p);
+            if (!digits) {
+                mav_stream::sendStatusText(MAV_SEVERITY_WARNING, "FLARE ORDER rejected: bad params");
+                return MAV_RESULT_DENIED;
+            }
+            const uint16_t nonce = (uint16_t)p[6];
+            flare_order::latch(digits, nonce, millis());
+            char buf[50];
+            snprintf(buf, sizeof(buf), "FLARE ORDER %lu nonce %u", (unsigned long)digits, nonce);
+            mav_stream::sendStatusText(MAV_SEVERITY_NOTICE, buf);
+            return MAV_RESULT_ACCEPTED;
+        }
 
         case MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN:
             // param1: 1 = reboot autopilot, 3 = reboot to bootloader.
