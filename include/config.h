@@ -649,7 +649,7 @@
 #define DIST_Q_V                0.05f       // KF velocity random walk (m/s/sqrt s)
 #define DIST_Q_B                0.002f      // KF accel-bias random walk (m/s^2/sqrt s)
 #define DIST_GATE_SIGMA2        16.0f       // velocity innovation gate: 4 sigma
-#define DIST_VEL_VAR            0.0004f     // companion velocity variance (0.02 m/s)
+#define DIST_VEL_VAR_MIN        0.0001f     // floor on the sender's velocity variance (0.01 m/s)
 #define DIST_ACCEL_DISTRUST     5           // consecutive gate rejections -> stop using accel
 #define DEF_DIST_KP_POS         1.2f        // 1/s   position error -> velocity reference
 #define DEF_DIST_A_DEC          0.25f       // m/s^2 stopping profile sqrt(2*a*|e|)

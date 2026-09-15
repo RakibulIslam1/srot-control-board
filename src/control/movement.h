@@ -60,7 +60,7 @@ void abort();   // brake→stop the current command (preemption / safety)
 // The companion's latest body-frame velocity over ground (m/s, x forward / y right) and
 // millis() AT RECEIPT. Called by the control loop every cycle BEFORE update(), from the
 // value+stamp pair the MAVLink task stored. rx_ms = 0 means never received.
-void feedVelocity(float vx, float vy, uint32_t rx_ms);
+void feedVelocity(float vx, float vy, float var_x, float var_y, uint32_t rx_ms);
 // Gravity-removed body acceleration (m/s^2) from the BNO, every cycle. Drives the DIST
 // estimator between velocity updates.
 void feedAccel(float ax, float ay);
