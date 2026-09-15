@@ -657,6 +657,8 @@
 #define DEF_DIST_FF             1.0f        // demand per m/s of reference (hull gain ~1)
 #define DEF_DIST_KP_V           1.2f        // demand per m/s of velocity error
 #define DEF_DIST_KI_V           0.6f        // integral: rejects a current
+// VISION_POSITION_ESTIMATE bound: any axis beyond this is a units or frame bug, not a pool.
+#define VPOS_MAX_M              100.0f
 #define DIST_MAX_M              20.0f       // a pool is 25 m; anything larger is a wire bug
 #define DIST_VEL_MAX_MPS        3.0f        // plausibility bound on an ingested velocity
 // Failsafe end state. A SURFACE failsafe does not disarm, so without this the vehicle sits

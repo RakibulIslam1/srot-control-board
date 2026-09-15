@@ -760,6 +760,27 @@ static void onVisionSpeedEstimate(const mavlink_message_t& msg) {
     g_state.control.vel_stamp_ms = millis();
 }
 
+// Stage 1 of the companion position feed: validate, store, count. Nothing reads it.
+// The same echo-before-actuation rule as LANDING_TARGET (PR #18): the host confirms the
+// board holds what was sent (VPOS_N, VPOS_RST) before any loop is allowed to use it.
+static void onVisionPositionEstimate(const mavlink_message_t& msg) {
+    mavlink_vision_position_estimate_t v;
+    mavlink_msg_vision_position_estimate_decode(&msg, &v);
+    if (!isfinite(v.x) || !isfinite(v.y) || !isfinite(v.z) || !isfinite(v.yaw)) return;
+    // Upper-triangle layout: [0] = xx, [6] = yy. Non-positive is not a measurement.
+    if (!isfinite(v.covariance[0]) || !isfinite(v.covariance[6]) ||
+        v.covariance[0] <= 0.0f || v.covariance[6] <= 0.0f) return;
+    if (fabsf(v.x) > VPOS_MAX_M || fabsf(v.y) > VPOS_MAX_M || fabsf(v.z) > VPOS_MAX_M) return;
+    StateLock lk(g_state.mtx_control);
+    if (!lk.ok()) return;
+    ControlState& c = g_state.control;
+    c.pos_x = v.x; c.pos_y = v.y; c.pos_z = v.z; c.pos_yaw = v.yaw;
+    c.pos_var_x = v.covariance[0]; c.pos_var_y = v.covariance[6];
+    c.pos_reset = v.reset_counter;
+    c.pos_stamp_ms = millis();
+    ++c.pos_n;
+}
+
 static void onSetMode(const mavlink_message_t& msg) {
     mavlink_set_mode_t sm;
     mavlink_msg_set_mode_decode(&msg, &sm);
@@ -811,6 +832,9 @@ void handle(const mavlink_message_t& msg) {
             break;
         case MAVLINK_MSG_ID_VISION_SPEED_ESTIMATE:
             onVisionSpeedEstimate(msg);
+            break;
+        case MAVLINK_MSG_ID_VISION_POSITION_ESTIMATE:
+            onVisionPositionEstimate(msg);
             break;
         default:
             break;

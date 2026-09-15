@@ -49,6 +49,9 @@ struct Snap {
     uint32_t mv_seq = 0, mv_done_seq = 0, mv_failed_seq = 0;
     float    mv_remain = 0;
     bool     mv_accel_ok = true;
+    uint32_t pos_n = 0;
+    uint8_t  pos_reset = 0;
+    uint32_t pos_stamp_ms = 0;
 };
 
 static void snapshot(Snap& s) {
@@ -85,6 +88,7 @@ static void snapshot(Snap& s) {
             s.mv_seq = c.mv_seq; s.mv_done_seq = c.mv_done_seq;
             s.mv_failed_seq = c.mv_failed_seq; s.mv_remain = c.mv_remain; s.mv_accel_ok = c.mv_accel_ok;
             s.mv_src_sys = c.mv_src_sys; s.mv_src_comp = c.mv_src_comp;
+            s.pos_n = c.pos_n; s.pos_reset = c.pos_reset; s.pos_stamp_ms = c.pos_stamp_ms;
         }
     }
     {
@@ -866,6 +870,13 @@ void update(uint32_t now) {
             sendNamed(now, "AT_OKPCT", autotune::consensusPct());
         }
         sendNamed(now, "KILL", s.kill ? 1.0f : 0.0f);
+        // Companion position echo (stage 1). Only once one has arrived, so a host that
+        // never enabled the feed pays no bandwidth on a link already 51.8 % full.
+        if (s.pos_n > 0) {
+            sendNamed(now, "VPOS_N", (float)s.pos_n);
+            sendNamed(now, "VPOS_RST", (float)s.pos_reset);
+            sendNamed(now, "VPOS_AGE", (float)(millis() - s.pos_stamp_ms));
+        }
         sendNamed(now, "CURR", s.curr);
         // Live pilot gain — the gain buttons change this at runtime, so a joystick UI has
         // no other way to know the current value (JS_GAIN_DEFAULT is only the boot value).
