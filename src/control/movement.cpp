@@ -4,6 +4,7 @@
 
 #include "control/movement.h"
 #include "control/stunt.h"
+#include "control/dist_leg.h"
 #include "comms/params.h"
 #include <math.h>
 
@@ -27,6 +28,18 @@ static float    s_target_yaw = 0;               // rad (absolute turn goal)
 static float    s_span = 0, s_remain = 0;
 static float    s_depth_ramp = 0, s_depth_goal = 0;   // smoothed / commanded depth setpoint
 static bool     s_running = false;
+// DIST leg. Estimation and control live in control/dist_leg; this is the state machine
+// around it. A velocity is only USED while fresh: past DIST_VEL_STALE_MS the leg brakes and
+// fails, because an accel-only estimate drifts and nothing would say so.
+static bool     s_dist = false, s_failed = false;
+static float    s_dist_sign = 1.0f;             // +1 / -1 along the leg axis
+static float    s_vx = 0, s_vy = 0, s_vvx = 0, s_vvy = 0, s_ax = 0, s_ay = 0;
+static uint32_t s_vel_rx_ms = 0, s_vel_used_rx = 0;
+static bool     s_sway = false;
+
+static bool velFresh(uint32_t now) {
+    return s_vel_rx_ms != 0 && (now - s_vel_rx_ms) < DIST_VEL_STALE_MS;
+}
 // Pending one-shot heading lock, emitted on the next update() and then cleared.
 static float    s_yaw_lock = 0;
 static bool     s_yaw_lock_pending = false;
@@ -49,6 +62,15 @@ static float pilotYawRate() {
     return (r > 1.0f) ? r : DEF_PILOT_YAW_RATE;
 }
 
+void feedVelocity(float vx, float vy, float var_x, float var_y, uint32_t rx_ms) {
+    s_vx = vx; s_vy = vy; s_vvx = var_x; s_vvy = var_y; s_vel_rx_ms = rx_ms;
+}
+void feedAccel(float ax, float ay) { s_ax = ax; s_ay = ay; }
+
+bool  failed()    { return s_failed; }
+float remaining() { return s_dist ? s_dist_sign * dist_leg::remaining() : 0.0f; }
+bool  accelTrusted() { return !s_dist || dist_leg::accelTrusted(); }
+
 void enter(float cur_depth) {
     s_depth_ramp = s_depth_goal = cur_depth;
     s_type = Type::NONE; s_phase = PH_IDLE; s_running = false; s_cur_speed = 0;
@@ -70,6 +92,7 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
     const float  prev_speed = s_cur_speed;
     s_uf = s_ul = 0; s_yaw_rate = 0;
     s_span = s_remain = 0;
+    s_dist = false; s_failed = false;
 
     // Lock the heading this command starts with. Every verb that is not itself a
     // heading change gets it, so "go forward 3 s" cannot yaw away mid-leg: the
@@ -77,7 +100,7 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
     // whatever it last latched. ARC and TURN are excluded — they command yaw.
     switch (t) {
         case Type::FWD: case Type::BACK: case Type::LEFT: case Type::RIGHT:
-        case Type::HOLD: case Type::STOP: case Type::DIVE:
+        case Type::HOLD: case Type::STOP: case Type::DIVE: case Type::DIST:
             s_yaw_lock = cur_yaw; s_yaw_lock_pending = true;
             break;
         default:
@@ -90,6 +113,28 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
         case Type::LEFT:  s_ul = -1; break;
         case Type::RIGHT: s_ul = +1; break;
         case Type::ARC:   s_uf = +1; s_yaw_rate = aux; break;       // fwd + signed yaw rate
+        case Type::DIST: {
+            // Refuse at the start rather than mid-leg: a leg that cannot measure its
+            // distance must not begin, because refusing half-way leaves the hull moving
+            // on an estimate nobody trusts.
+            s_dist = true;
+            s_dist_sign = (primary < 0.0f) ? -1.0f : 1.0f;
+            s_sway = (submode == 1);
+            s_span = s_remain = fabsf(primary);
+            if (!velFresh(millis()) || s_span > DIST_MAX_M) {
+                s_failed = true;
+                s_type = Type::NONE; s_phase = PH_IDLE; s_running = false;
+                return;
+            }
+            // Work in the leg's own signed axis so the filter and PID see "+ = toward goal".
+            dist_leg::begin(s_span, s_speed > 0.0f ? s_speed : g_params.move_cruise_max,
+                            s_dist_sign * (s_sway ? s_vy : s_vx));
+            s_vel_used_rx = s_vel_rx_ms;
+            s_dur_ms = 0;
+            s_cur_speed = 0;
+            s_phase = PH_CRUISE;
+            return;
+        }
         case Type::TURN:
             s_yaw_rate = (speed > 1.0f) ? speed : g_params.move_yaw_rate;   // deg/s
             s_target_yaw = (submode == 1) ? (primary * (float)M_PI / 180.0f)               // absolute
@@ -174,11 +219,41 @@ Demand update(float roll, float pitch, float yaw, float gx, float gy, float gz,
 
     // Global timeout → brake out.
     if (s_running && s_phase != PH_BRAKE && (now - s_start_ms) > s_timeout_ms) {
+        // A DIST leg that runs out of time has not travelled its distance. A timed leg's
+        // timeout is its normal end; this one's is a failure, and says so.
+        if (s_dist && fabsf(s_remain) > DIST_TOL_M) s_failed = true;
         s_phase = PH_BRAKE; s_start_ms = now; s_brake_ms = brakeMs(s_cur_speed);
+    }
+
+    // DIST: the estimator runs in every moving phase, the brake included -- the hull is still
+    // covering ground while it stops, and that ground is part of the answer.
+    if (s_dist && (s_phase == PH_CRUISE || s_phase == PH_BRAKE)) {
+        dist_leg::predict(s_dist_sign * (s_sway ? s_ay : s_ax), dt);
+        if (s_vel_rx_ms != s_vel_used_rx) {           // a new companion velocity arrived
+            s_vel_used_rx = s_vel_rx_ms;
+            // The SENDER's variance: a velocity over a textured floor and one over a bare
+            // patch do not deserve equal weight. Floored so a tiny one cannot pin the filter.
+            const float var = s_sway ? s_vvy : s_vvx;
+            dist_leg::correct(s_dist_sign * (s_sway ? s_vy : s_vx),
+                              (var > DIST_VEL_VAR_MIN) ? var : DIST_VEL_VAR_MIN);
+        }
+        s_remain = dist_leg::remaining();
     }
 
     switch (s_phase) {
         case PH_CRUISE: {
+            if (s_dist && !velFresh(now)) {          // feed lost mid-leg: stop, and say so
+                s_failed = true;
+                s_phase = PH_BRAKE; s_start_ms = now; s_brake_ms = brakeMs(s_cur_speed);
+                break;
+            }
+            if (s_dist) {
+                const float u = s_dist_sign * dist_leg::demand(dt);
+                if (s_sway) d.lat = u; else d.fwd = u;
+                s_cur_speed = fabsf(u);
+                if (dist_leg::settled(now)) s_phase = PH_DONE;
+                break;
+            }
             if (s_cur_speed < s_speed) s_cur_speed = min(s_cur_speed + g_params.move_accel * dt, s_speed);
             d.fwd = s_uf * s_cur_speed;
             d.lat = s_ul * s_cur_speed;
@@ -247,8 +322,12 @@ float progress() {
     if (!s_running) return 1.0f;
     const uint32_t now = millis();
     switch (s_phase) {
-        case PH_CRUISE: return s_dur_ms ? constrain((float)(now - s_start_ms) / (float)s_dur_ms, 0.0f, 0.9f) : 0.5f;
-        case PH_BRAKE:  return 0.9f + (s_brake_ms ? 0.1f * constrain((float)(now - s_start_ms) / (float)s_brake_ms, 0.0f, 1.0f) : 0.1f);
+        case PH_CRUISE:
+        case PH_BRAKE:
+            if (s_dist) return (s_span > 1e-3f) ? constrain(1.0f - s_remain / s_span, 0.0f, 0.99f) : 0.99f;
+            if (s_phase == PH_BRAKE)
+                return 0.9f + (s_brake_ms ? 0.1f * constrain((float)(now - s_start_ms) / (float)s_brake_ms, 0.0f, 1.0f) : 0.1f);
+            return s_dur_ms ? constrain((float)(now - s_start_ms) / (float)s_dur_ms, 0.0f, 0.9f) : 0.5f;
         case PH_STYLE:  return stunt::progress();
         case PH_HOLD:   return s_dur_ms ? constrain((float)(now - s_start_ms) / (float)s_dur_ms, 0.0f, 0.99f) : 0.5f;
         // TURN and DIVE are closed-loop, so progress is the fraction of the latched span

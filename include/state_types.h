@@ -186,6 +186,23 @@ struct ControlState {
     float       mv_progress = 0;     // 0..1
     bool        mv_active = false;
     uint32_t    mv_done_seq = 0;     // set to mv_seq when that command finishes (→ ACCEPTED ACK)
+    uint32_t    mv_failed_seq = 0;   // set to mv_seq when that command REFUSED (→ FAILED ACK)
+    float       mv_remain = 0;       // DIST: signed metres still to go (telemetry MV_REMAIN)
+    bool        mv_accel_ok = true;  // DIST: false once the accelerometer was rejected (DIST_ACCOK)
+
+    // Companion body velocity over ground (VISION_SPEED_ESTIMATE). value + stamp, the same
+    // pair sp_stamp_ms gives the sticks. vel_stamp_ms = millis() AT RECEIPT, 0 = never.
+    float       vel_x = 0, vel_y = 0;
+    float       vel_var_x = 0, vel_var_y = 0;   // the sender's own variances (m^2/s^2)
+    uint32_t    vel_stamp_ms = 0;
+    // Companion POSITION (VISION_POSITION_ESTIMATE, 102), stage 1: stored and echoed,
+    // consumed by nothing. NED metres in the companion's frame, variances m^2.
+    // pos_reset = the sender's reset_counter: a jump (frame change, prop fix)
+    // across which deltas must not be taken. pos_stamp_ms = millis() at receipt.
+    float       pos_x = 0, pos_y = 0, pos_z = 0, pos_yaw = 0;
+    float       pos_var_x = 0, pos_var_y = 0;
+    uint8_t     pos_reset = 0;
+    uint32_t    pos_stamp_ms = 0, pos_n = 0;
 };
 
 // -----------------------------------------------------------------------------
