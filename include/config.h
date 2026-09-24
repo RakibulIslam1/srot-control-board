@@ -386,6 +386,21 @@
 #define TASK_DSHOT_STACK        4096
 #define TASK_DSHOT_HZ           500         // match the 500 Hz control loop
 
+// Output-path watchdog (Task_DShot_RMT). The DShot task re-sends its CACHED command every
+// cycle, so if Task_ControlLoop stalls or livelocks the Pico keeps receiving fresh, CRC-valid,
+// ARMED frames and its own link failsafe never trips: the last demand is held for ever. The
+// control loop therefore bumps ThrusterState::out_seq on every publish, and the DShot task
+// sends DISARMED frames once it has run this many consecutive cycles without seeing it move.
+//
+// Counted in DShot CYCLES, not milliseconds, on purpose. A flash write on Core 0 (every
+// param save — they are edited live from Bondor) disables the cache and suspends BOTH
+// Core-1 tasks together for tens of ms; a wall-clock age would read that shared pause as a
+// control stall and cut the thrusters mid-dive. A cycle count only advances while this task
+// itself is running, so it measures exactly "the output path is alive and the control loop
+// is not". 10 cycles = 20 ms at 500 Hz: well clear of a lock miss or two, far inside the
+// Pico's own 150 ms link failsafe.
+#define CTRL_OUT_STALE_CYCLES   10
+
 // -----------------------------------------------------------------------------
 // SECTION 7 — DEFAULT TUNING CONSTANTS (NVS fallbacks; live-editable via QGC)
 // The authoritative runtime values come from NVS (Preferences); these are the

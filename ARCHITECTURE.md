@@ -130,6 +130,16 @@ Failsafes (leak / low-batt / GCS-loss → SURFACE); arming enforcement (the 2nd-
 thruster-kill is display-only, never gates arming); motor-test 2 Hz keep-alive with
 auto-disarm; deferred NVS writes on Core 0; stack high-water for all six tasks as `STK_*`.
 
+**Output-path watchdog** (`Task_DShot_RMT`). The DShot task re-sends its cached command every
+cycle, so a stalled control loop would otherwise keep the Pico fed with fresh ARMED frames and
+its link failsafe would never trip. The control loop bumps `ThrusterState::out_seq` on each
+publish; if the DShot task runs `CTRL_OUT_STALE_CYCLES` (10 = 20 ms) cycles without seeing it
+move, it sends the disarmed stop and reports `Control loop stalled - thrusters stopped`
+(`Control loop resumed` when it comes back — not latched). Counted in cycles, not ms, so a
+flash write that pauses both Core-1 tasks together is not mistaken for a stall. The ESP-IDF
+task watchdog is **not** subscribed for the flight tasks: its 5 s timeout is far too slow to
+matter next to this, and its action is a reboot.
+
 ---
 
 ## 3. MAVLink / QGC / BlueOS / companion
