@@ -384,10 +384,10 @@ Everything the firmware dispatches. **Anything not listed returns `MAV_RESULT_UN
 | `DO_SET_MODE` | 176 | **p2** = custom_mode (table §3) |
 | **`SROT_MOVE`** | **31000** | the movement verb — §5 |
 | `DO_MOTOR_TEST` | 209 | p1 motor (1-based), p2 throttle type (0 = percent), p3 throttle, p4 timeout s. **Requires ARMED.** Re-send ≥2 Hz as a keep-alive; window 600–3000 ms |
-| `PREFLIGHT_CALIBRATION` | 241 | p1 gyro · p2 mag · p3 baro · p5 1 = accel 6-point, 2/4 = level |
+| `PREFLIGHT_CALIBRATION` | 241 | p1 gyro · p2 mag · p3 baro · p5 1 = accel 6-point, 2/4 = level. **Requires DISARMED** — armed → `TEMPORARILY_REJECTED` + `STATUSTEXT "Calibration refused: disarm first"` |
 | `ACCELCAL_VEHICLE_POS` | 42429 | p1 = 1..6 face, during the 6-point accel cal |
 | `DO_START_MAG_CAL` | 42424 | compass cal |
-| `PREFLIGHT_STORAGE` | 245 | **p1 = 1** save params · **p1 = 2** factory reset (params **and** learned motor directions) |
+| `PREFLIGHT_STORAGE` | 245 | **p1 = 1** save params · **p1 = 2** factory reset (params **and** learned motor directions) — p1 = 2 **requires DISARMED** (armed → `TEMPORARILY_REJECTED` + `STATUSTEXT`) |
 | `DO_SET_SERVO` | 183 | p1 channel (1-based), p2 µs — PCA9685 |
 | `DO_SET_RELAY` | 181 | p1 relay instance (0-based), p2 1/0. **Reaches PCA channels 9–16 only** (instance → `PCA_RELAY_BASE_CH + n`). To drive a switch channel in the 1–8 range use `DO_SET_SERVO` — on a `SERVOn_ROLE = 2` channel its pulse width is a level, **≥ 1500 µs = ON**. |
 | `USER_1/2/3` | 31010-31012 | yaw / pitch / roll spin (stunt) |
@@ -395,7 +395,7 @@ Everything the firmware dispatches. **Anything not listed returns `MAV_RESULT_UN
 | `USER_5` | 31014 | autotune start |
 | `REQUEST_MESSAGE` | 512 | |
 | `REQUEST_AUTOPILOT_CAPABILITIES` | 520 | → `AUTOPILOT_VERSION` |
-| `PREFLIGHT_REBOOT_SHUTDOWN` | 246 | |
+| `PREFLIGHT_REBOOT_SHUTDOWN` | 246 | p1 1 = reboot, 3 = bootloader. **Requires DISARMED** — armed → `TEMPORARILY_REJECTED` + `STATUSTEXT "Reboot refused: disarm first"` |
 
 **Messages handled:** `HEARTBEAT`, `PARAM_REQUEST_LIST`, `PARAM_REQUEST_READ`, `PARAM_SET`,
 `COMMAND_LONG`, `COMMAND_INT`, `SET_MODE`, `MANUAL_CONTROL`, and the mission set (`MISSION_COUNT`,
