@@ -920,11 +920,14 @@ void Task_ControlLoop(void* pv) {
                                                         : (norm[i] * (float)in.dir[i]);
                 }
                 g_state.thrusters.armed = armed;
+                // Liveness for the DShot task's output-path watchdog. Bumped only when the
+                // publish lands, so a run of lock misses reads as stale too — which it is.
+                // (Replaces ControlState::loop_stamp_ms, which was written here every cycle
+                // and read nowhere.)
+                static uint32_t s_out_seq = 0;
+                if (++s_out_seq == 0) s_out_seq = 1;   // 0 is reserved for "never published"
+                g_state.thrusters.out_seq = s_out_seq;
             }
-        }
-        {
-            StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(1));
-            if (lk.ok()) g_state.control.loop_stamp_ms = millis();
         }
 
         // Publish movement state for Task_MAVLink (ACK progress/complete + telemetry).

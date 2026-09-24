@@ -169,7 +169,6 @@ struct ControlState {
     float       pattern_return_yaw = 0;
 
     bool        autotune_active = false;
-    uint32_t    loop_stamp_ms = 0;
 
     // AUTO-mode movement (MAV_CMD_SROT_MOVE). Command: set by Task_MAVLink (Core 0) on a new
     // SROT_MOVE; the control loop starts it when `mv_seq` changes. State: set by the control
@@ -204,6 +203,10 @@ struct ThrusterState {
     // Normalized mixer demand (−1..1) per thruster — used to derive the signed target
     // RPM in closed-loop RPM mode (throttle[] is the open-loop DShot value).
     float    norm[NUM_THRUSTERS] = {0};
+    // Incremented by Task_ControlLoop on every publish of throttle[]/norm[]/armed, under the
+    // same lock, so the DShot task can tell a fresh command from its own re-sent cache.
+    // 0 = the control loop has never published. See CTRL_OUT_STALE_CYCLES.
+    uint32_t out_seq = 0;
     // Motor-test / detect override: when active, the named motor is driven at
     // test_throttle (−1..1) until test_expire_ms, bypassing the mixer. Set by
     // MAV_CMD_DO_MOTOR_TEST / the calibration routines; consumed by the control
