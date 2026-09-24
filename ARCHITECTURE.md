@@ -102,6 +102,11 @@ creep. What it actively does depends on the mode:
 | MOTOR_DETECT (20) | — | — | Pulses each thruster to detect direction |
 | STUNT/PATTERN (100/101) | scripted | scripted | Cmd-triggered rotations/sequences |
 
+**Arming is refused** in STUNT, PATTERN, AUTOTUNE, MOTOR_TUNE and MOTOR_DETECT, and while an
+`ATUNE`/`USER_5` autotune is pending (`arming::canArm`, not bypassed by `ARMING_CHECK=0`):
+each would start a scripted, full-authority manoeuvre the instant the vehicle armed. Arm in a
+flight mode, then select them.
+
 Entering **Depth Hold** captures the *current* depth as target (it doesn't dive to a
 preset); the throttle stick slews the target and re-locks on release. **No mode holds
 horizontal position** (no GPS/DVL/flow fusion yet) — current can drift the sub sideways.
