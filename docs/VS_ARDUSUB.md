@@ -59,10 +59,13 @@ outputs from the same MCU that runs everything else.
 
 ### 5. IMU loss degrades instead of disarming
 
-Lose attitude mid-dive and Hengla warns, zeroes the stale rates, holds the last-good attitude
-and **stays armed** — for a submarine, cutting the thrusters mid-water is usually worse than
-flying on slightly stale data. It also self-heals the BNO085 (re-issues reports, then re-opens
-the SH-2 session).
+Lose attitude mid-dive (>300 ms) and Hengla warns, turns **attitude control off** — roll,
+pitch and yaw demands zeroed and the rate integrators held empty, except in MANUAL where they
+are the pilot's own sticks — keeps depth and translation, and **stays armed**: for a submarine,
+cutting the thrusters mid-water is usually worse than losing attitude hold. (It used to claim
+to "hold the last attitude"; a frozen angle against a zeroed gyro actually produced a constant,
+ramping torque.) It also self-heals the BNO085 (re-issues reports, then re-opens the SH-2
+session).
 
 ArduSub's EKF failsafe is more conservative, which is the right call for a vehicle that can fall
 out of the sky and the wrong one for a neutrally-buoyant vehicle.
