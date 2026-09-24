@@ -544,7 +544,7 @@ void Task_ControlLoop(void* pv) {
         }
         // Explain the two ways these silently do nothing, instead of leaving the pilot guessing.
         if (in.mode == FlightMode::MOTOR_TUNE && !in.armed && !prev_mtune)
-            ui_log::set("MTune: arm to start");
+            ui_log::set("MTune: arm, then select");   // canArm refuses arming IN this mode
         if (in.mode == FlightMode::MOTOR_TUNE && g_params.mtune_en <= 0.5f && !prev_mtune)
             ui_log::set("MTune off: set MTUNE_EN=1");
         prev_autotune = at_active;

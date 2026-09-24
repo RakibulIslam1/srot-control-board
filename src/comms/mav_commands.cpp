@@ -703,9 +703,15 @@ static void onParamSet(const mavlink_message_t& msg) {
             mav_stream::sendStatusText(MAV_SEVERITY_ERROR, wb);
         }
         // ATUNE is a momentary trigger: setting it ≥1 starts the relay auto-tune.
-        if (strncmp(name, "ATUNE", 16) == 0 && ps.param_value >= 1.0f) {
+        // ATUNE=0 withdraws a trigger that has not started yet. Without this, a trigger set
+        // while disarmed could only be cleared by arming — which starts the tune — and
+        // canArm() now refuses to arm with one pending, so it would be a dead end.
+        if (strncmp(name, "ATUNE", 16) == 0) {
             StateLock lk(g_state.mtx_control);
-            if (lk.ok()) g_state.control.autotune_active = true;
+            if (lk.ok()) {
+                if (ps.param_value >= 1.0f)        g_state.control.autotune_active = true;
+                else if (!g_state.control.armed)   g_state.control.autotune_active = false;
+            }
         }
         // Pin assignments only take effect after a reboot (ArduPilot-style).
         if (strncmp(name, "PIN_", 4) == 0) {

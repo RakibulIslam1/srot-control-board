@@ -9,8 +9,38 @@
 
 namespace arming {
 
+// Modes (and the ATUNE latch) in which ARMING ITSELF would start a scripted, full-authority
+// manoeuvre. USER_1..5 and the ATUNE param select these while disarmed, and their state
+// machines are primed at mode entry — so a yaw spin queued on the bench fired at full rate
+// the instant the vehicle armed, with no further command. Arm in a flight mode; select
+// these once armed, where selecting them IS the deliberate act.
+//
+// MOTOR_TUNE and MOTOR_DETECT used to be "select, then arm to start". They now follow the
+// same rule: arm (STABILIZE/MANUAL), then select the mode.
+static const char* modeRefusal(FlightMode m, bool autotune_pending) {
+    switch (m) {
+        case FlightMode::STUNT:        return "STUNT queued - select a flight mode";
+        case FlightMode::PATTERN:      return "PATTERN queued - select a flight mode";
+        case FlightMode::AUTOTUNE:     return "AUTOTUNE mode - arm first, then select";
+        case FlightMode::MOTOR_TUNE:   return "MOTOR_TUNE mode - arm first, then select";
+        case FlightMode::MOTOR_DETECT: return "MOTOR_DETECT - arm first, then select";
+        default: break;
+    }
+    if (autotune_pending) return "autotune pending - set ATUNE=0";
+    return nullptr;
+}
+
 bool canArm(const char** reason) {
-    // ARMING_CHECK == 0 → skip pre-arm checks (arm always allowed).
+    // Mode check FIRST, and NOT bypassed by ARMING_CHECK=0: that switch exists to skip
+    // sensor pre-arm checks on a bench, not to let arming launch a queued manoeuvre.
+    {
+        StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(5));
+        if (!lk.ok()) { if (reason) *reason = "state busy"; return false; }
+        const char* why = modeRefusal(g_state.control.mode, g_state.control.autotune_active);
+        if (why) { if (reason) *reason = why; return false; }
+    }
+
+    // ARMING_CHECK == 0 → skip the remaining (sensor) pre-arm checks.
     if (g_params.arming_check < 0.5f) return true;
 
     bool imu_ok = false, leak = false, aux_fresh = false;
