@@ -70,6 +70,14 @@ void selectFrame(int frame_class) {
             snprintf(b, sizeof(b), "Frame: %s, 6 DOF", allocator::frameName());
         }
         mav_stream::queueStatusText(MAV_SEVERITY_INFO, b);
+
+        // ⚠ ONE MESSAGE, NOT THREE. queueStatusText holds QCAP = 4 slots and
+        // nothing drains them until Task_MAVLink starts, so this runs with the
+        // queue cold and params::init() may already have used one. Three lines
+        // here could silently drop the third. The per-axis AUTHORITY -- the
+        // number this allocation turns on -- goes out from mav_stream's repeated
+        // configBanner() instead, which is also the only way a GCS that connects
+        // after boot ever sees it.
         return;
     }
     // ⛔ FALL BACK LOUDLY. A geometry that will not solve is a configuration error, and
@@ -81,6 +89,10 @@ void selectFrame(int frame_class) {
     mav_stream::queueStatusText(MAV_SEVERITY_ERROR, b);
 }
 
+// The allocation actually in force. Distinct from the FRAME_CLASS *param*, which
+// is what was ASKED for -- selectFrame() falls back to 0 on a geometry that will
+// not solve, and a host that reads the param instead of this would believe the
+// wrong allocation. mav_stream's CFG line reports this one.
 int activeFrameClass() { return s_frame_class; }
 
 void mix(float roll, float pitch, float yaw,

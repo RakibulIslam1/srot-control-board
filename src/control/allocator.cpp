@@ -100,14 +100,10 @@ static void cross3(const float a[3], const float b[3], float out[3]) {
     out[2] = a[0] * b[1] - a[1] * b[0];
 }
 
-// Build s_A (and s_auth) from s_B, using only the thrusters marked available.
-// Split out of begin() because it is also what a thruster failure needs: the
-// geometry has not changed, only which columns may be used.
+// Solve the geometry: s_B -> s_A and s_auth. Called once, from begin().
 //
-// ⚠ NOT CALLED FROM THE FLIGHT LOOP. It solves a linear system. A failure has to
-// be handled off-loop (recompute, then publish), which is also the honest place
-// to decide whether the vehicle should still be flying at all.
-static bool build(const bool* avail) {
+// ⚠ NOT CALLABLE FROM THE FLIGHT LOOP. It solves a linear system.
+static bool build() {
     memset(s_A, 0, sizeof(s_A));
     for (int k = 0; k < AX_COUNT; ++k) s_auth[k] = 0.0f;
 
@@ -117,7 +113,6 @@ static bool build(const bool* avail) {
     for (int i = 0; i < AX_COUNT; ++i) {
         float mx = 0.0f;
         for (int j = 0; j < s_n; ++j) {
-            if (avail && !avail[j]) continue;
             float v = fabsf(s_B[i][j]);
             if (v > mx) mx = v;
         }
@@ -126,9 +121,11 @@ static bool build(const bool* avail) {
     }
     if (m == 0) return false;
 
-    // The usable columns, in order.
+    // The columns, in order. (Kept as an indirection because the wide/square
+    // branch below indexes them, and a future availability mask would slot in
+    // here -- but nothing masks today, so this is the identity.)
     int col[ALLOC_MAX_THRUSTERS], nc = 0;
-    for (int j = 0; j < s_n; ++j) if (!avail || avail[j]) col[nc++] = j;
+    for (int j = 0; j < s_n; ++j) col[nc++] = j;
     if (nc < m) return false;   // fewer thrusters than producible axes: underdetermined
 
     // Br is m x nc. Solve for the outputs that produce each unit axis wrench.
@@ -210,29 +207,11 @@ bool begin(int cls) {
         s_B[AX_YAW][j]   = mom[2];
     }
 
-    if (!build(nullptr)) return false;
+    if (!build()) return false;
     s_ready = true;
     return true;
 }
 
-bool rebuild(const bool* avail) {
-    if (s_cls < 0 || s_n <= 0) return false;
-    // Keep the previous solution if the new one is not viable: a hull that has
-    // just lost an axis is not improved by also losing its allocator.
-    float A_save[ALLOC_MAX_THRUSTERS][AX_COUNT];
-    float auth_save[AX_COUNT];
-    unsigned unact_save = s_unact;
-    memcpy(A_save, s_A, sizeof(s_A));
-    memcpy(auth_save, s_auth, sizeof(s_auth));
-    if (build(avail)) return true;
-    memcpy(s_A, A_save, sizeof(s_A));
-    memcpy(s_auth, auth_save, sizeof(s_auth));
-    s_unact = unact_save;
-    return false;
-}
-
-bool        ready()         { return s_ready; }
-int         frameClass()    { return s_cls; }
 const char* frameName()     { return s_name; }
 int         thrusterCount() { return s_ready ? s_n : 0; }
 unsigned    unactuatedMask(){ return s_unact; }
@@ -263,8 +242,8 @@ static float headroom(float a, float t) {
     return (lim < 0.0f) ? 0.0f : (lim > 1.0f ? 1.0f : lim);
 }
 
-Result allocate(const float demand[AX_COUNT], const bool* avail,
-                int priority, float out[ALLOC_MAX_THRUSTERS]) {
+Result allocate(const float demand[AX_COUNT], int priority,
+                float out[ALLOC_MAX_THRUSTERS]) {
     Result r;
     r.ok = false;
     r.scale_attitude = 0.0f;
@@ -288,12 +267,8 @@ Result allocate(const float demand[AX_COUNT], const bool* avail,
     }
 
     // Two partial solutions, so the scaling can give one of them precedence.
-    // Available thrusters only: an unavailable column has a zero row in s_A when
-    // build() was told about it, but a caller may pass `avail` per frame without
-    // having rebuilt, so mask here too rather than trusting that.
     float ua[ALLOC_MAX_THRUSTERS] = {0}, ut[ALLOC_MAX_THRUSTERS] = {0};
     for (int j = 0; j < s_n; ++j) {
-        if (avail && !avail[j]) continue;
         ua[j] = s_A[j][AX_PITCH] * d[AX_PITCH] * s_auth[AX_PITCH]
               + s_A[j][AX_ROLL]  * d[AX_ROLL]  * s_auth[AX_ROLL]
               + s_A[j][AX_YAW]   * d[AX_YAW]   * s_auth[AX_YAW];
