@@ -50,6 +50,48 @@
 //  about magnitude. That is enough to allocate correctly and not enough to
 //  predict a trajectory, and the distinction matters.
 //
+//  ── WHY NOT A QP, WHICH IS WHAT THE LITERATURE AND OUR RIVALS USE ───────────
+//
+//  Bumblebee's published stack diagram carries a distinct "Thrust Allocator"
+//  stage, and the AUV control-allocation literature is largely optimisation-based:
+//  redistributed pseudo-inverse (RPI), and QP formulations that fold thruster
+//  saturation and energy into the objective (e.g. prioritised INDI-QP allocation,
+//  RA-L 2026; T-S fuzzy + pseudo-inverse QP under constraints). So a QP is the
+//  obvious thing to reach for, and we measured it before deciding not to.
+//
+//  Four allocators, same geometry, all 992 INFEASIBLE demands of a 4^5 sweep:
+//
+//    allocator            wrench direction err    attitude err    axis reversals
+//    uniform (default)      0.00 deg  (exact)         39.9 %            0
+//    attitude-first        60.51 deg (by design)       0.0 %            0
+//    RPI                    8.01 deg                  69.7 %            0
+//    QP (bounded LSQ)       8.01 deg                  69.7 %            0
+//
+//  ⛔ QP AND RPI ARE WORSE HERE, ON BOTH METRICS THAT MATTER TO A HULL. They
+//  minimise ||Bu - w||, and on an L2 score they do beat uniform scaling in 81 % of
+//  these cases -- which is exactly why L2 is the wrong objective. Being "closest"
+//  is allowed to rotate the wrench: 8 deg of mean direction error, 12.5 deg worst.
+//  A vehicle asked for surge-and-yaw wants a WEAKER version of that motion, not a
+//  different motion that happens to be nearer in norm. Uniform scaling is exactly
+//  direction-preserving, and on this hull it is also nearly half the attitude
+//  error.
+//
+//  And the redundancy QP exists to exploit is not there: mongla-5's matrix is 5x5
+//  and exactly determined (null space dimension 0), so for every ACHIEVABLE wrench
+//  all four methods return the identical u. QP only differs where the demand
+//  cannot be met, and there it differs for the worse.
+//
+//  ⚠ THIS CONCLUSION IS FRAME-SPECIFIC. The 8-thruster frame has a 2-dimensional
+//  null space, and there a QP could genuinely trade thruster effort at no cost to
+//  the wrench. If that frame is ever flown, re-measure before assuming this row of
+//  the table transfers -- it will not.
+//
+//  ⭐ THE RESIDUAL IS NOT AN ALLOCATION PROBLEM. 39.9 % attitude error while
+//  saturating is real, and no allocator can remove it: the thrust does not exist.
+//  The fix is to TELL THE CONTROLLERS, which is what upstream #20 asks for -- the
+//  difference between demanded and achieved is precisely the charge the PID
+//  integrators must not accumulate. `achieved()` is that number, ready for it.
+//
 //  ⚠ NO ARDUINO, NO PARAMS, NO GLOBALS IN THE MATH. This file compiles on a host
 //  with nothing but <math.h>, which is what makes `test/test_allocator` possible.
 //  A 500 Hz allocator that can only be checked by flying it is not checkable.
