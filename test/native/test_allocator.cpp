@@ -76,7 +76,7 @@ static void test_roll_is_refused() {
 
     float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS];
     d[AX_ROLL] = 0.8f;
-    Result r = allocate(d, nullptr, PRIO_UNIFORM, out);
+    Result r = allocate(d, PRIO_UNIFORM, out);
     check(r.ok, "allocate() still succeeds");
     check((r.refused_mask & (1u << AX_ROLL)) != 0, "roll demand REPORTED as refused");
     float sum = 0.0f;
@@ -112,7 +112,7 @@ static void test_unit_demand_is_exactly_full() {
     for (int a = 0; a < 5; ++a) {
         float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS];
         d[axes[a]] = 1.0f;
-        Result r = allocate(d, nullptr, PRIO_UNIFORM, out);
+        Result r = allocate(d, PRIO_UNIFORM, out);
         float mx = 0.0f;
         for (int j = 0; j < 5; ++j) mx = fmaxf(mx, fabsf(out[j]));
         char buf[64];
@@ -138,7 +138,7 @@ static void test_surge_pitch_coupling() {
     check(begin(frames::CLASS_MONGLA5), "begin");
     float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS];
     d[AX_SURGE] = 1.0f;
-    allocate(d, nullptr, PRIO_UNIFORM, out);
+    allocate(d, PRIO_UNIFORM, out);
     near(out[4], 1.0f,      1e-5f, "axial at full");
     near(out[2], -0.015530f, 1e-5f, "vert_aft trims");
     near(out[3], +0.015530f, 1e-5f, "vert_fwd trims the other way");
@@ -157,14 +157,14 @@ static void test_priority_modes() {
     float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS];
     d[AX_SWAY] = 1.0f; d[AX_YAW] = 1.0f;   // the lateral pair, asked for twice over
 
-    Result u = allocate(d, nullptr, PRIO_UNIFORM, out);
+    Result u = allocate(d, PRIO_UNIFORM, out);
     near(u.scale_attitude, 0.5f, 1e-5f, "uniform: everything halved");
     near(out[0], 1.0f,  1e-5f, "uniform: lat_aft at the rail");
     near(out[1], 0.0f,  1e-5f, "uniform: lat_fwd stopped");
     float wr[AX_COUNT]; achieved(out, wr);
     near(wr[AX_YAW] / authority(AX_YAW), 0.5f, 1e-4f, "uniform: HALF the yaw it asked for");
 
-    Result a = allocate(d, nullptr, PRIO_ATTITUDE, out);
+    Result a = allocate(d, PRIO_ATTITUDE, out);
     near(a.scale_attitude,    1.0f, 1e-5f, "attitude-first: yaw met in full");
     near(a.scale_translation, 0.0f, 1e-5f, "attitude-first: sway yields entirely");
     achieved(out, wr);
@@ -183,54 +183,92 @@ static void test_groups_stay_independent() {
     check(begin(frames::CLASS_MONGLA5), "begin");
     float d1[AX_COUNT] = {0}, o1[ALLOC_MAX_THRUSTERS];
     d1[AX_YAW] = 0.6f;
-    allocate(d1, nullptr, PRIO_UNIFORM, o1);
+    allocate(d1, PRIO_UNIFORM, o1);
     float d2[AX_COUNT] = {0}, o2[ALLOC_MAX_THRUSTERS];
     d2[AX_YAW] = 0.6f; d2[AX_SURGE] = 1.0f;
-    allocate(d2, nullptr, PRIO_UNIFORM, o2);
+    allocate(d2, PRIO_UNIFORM, o2);
     check(o1[0] == o2[0] && o1[1] == o2[1], "lateral pair BIT-IDENTICAL with surge added");
     printf("        (%.9f, %.9f) vs (%.9f, %.9f)\n",
            (double)o1[0], (double)o1[1], (double)o2[0], (double)o2[1]);
 }
 
-// A dead thruster is a limit, not a new matrix. With one lateral tunnel gone the
-// hull loses a DOF outright -- there is no redundancy to fall back on -- and the
-// allocator must say so rather than produce a plausible wrong answer.
-static void test_dead_thruster() {
-    printf("\nA DEAD THRUSTER: no redundancy exists, so say so\n");
-    check(begin(frames::CLASS_MONGLA5), "begin");
-    float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS];
-    bool avail[ALLOC_MAX_THRUSTERS] = { false, true, true, true, true };  // lat_aft dead
-    d[AX_YAW] = 1.0f;
-    Result r = allocate(d, avail, PRIO_UNIFORM, out);
-    check(r.ok, "allocate() succeeds");
-    near(out[0], 0.0f, 1e-9f, "the dead thruster is commanded nothing");
-    float wr[AX_COUNT];
-    achieved(out, wr);
-    printf("        yaw asked %.3f, got %.3f; sway side-effect %.4f\n",
-           (double)authority(AX_YAW), (double)wr[AX_YAW], (double)wr[AX_SWAY]);
-    check(fabsf(wr[AX_SWAY]) > 1e-3f,
-          "⛔ and yaw now comes with unavoidable SWAY -- one pair, one thruster");
-    printf("        ^ the determinant is 0.1817 with a condition number of 5.71: exactly\n"
-           "          determined, zero redundancy. Any single loss costs a whole DOF.\n");
+// ⛔ THIS HULL HAS NO REDUNDANCY, asserted against the GEOMETRY rather than
+// against a fault-tolerance API.
+//
+// An earlier version proved this through `rebuild(avail)` and an `avail` mask on
+// `allocate()`. Both are gone: nothing on the vehicle can detect a dead thruster
+// (ESC presence never reaches the wire -- their #10), the flight path only ever
+// passed nullptr, and on a 5x5 exactly-determined matrix re-solving cannot help
+// anyway. Testing a function nobody calls is testing dead code.
+//
+// The claim that actually matters survives, and it is stronger stated this way:
+// remove ANY single column from B and the rank drops, i.e. an axis is LOST. On
+// the 8-thruster frame it does not. That difference is the whole argument for
+// redundancy, and it is a property of the geometry, not of any code path.
+static int rank_of(const float* rows, int nr, int nc) {
+    // Gaussian elimination with partial pivoting; counts independent rows.
+    float m[AX_COUNT * ALLOC_MAX_THRUSTERS];
+    for (int i = 0; i < nr * nc; ++i) m[i] = rows[i];
+    int rank = 0;
+    for (int c = 0; c < nc && rank < nr; ++c) {
+        int piv = -1; float best = 1e-6f;
+        for (int r = rank; r < nr; ++r) {
+            const float v = fabsf(m[r * nc + c]);
+            if (v > best) { best = v; piv = r; }
+        }
+        if (piv < 0) continue;
+        for (int k = 0; k < nc; ++k) { float t = m[rank*nc+k]; m[rank*nc+k] = m[piv*nc+k]; m[piv*nc+k] = t; }
+        for (int r = 0; r < nr; ++r) {
+            if (r == rank) continue;
+            const float f = m[r * nc + c] / m[rank * nc + c];
+            if (f == 0.0f) continue;
+            for (int k = 0; k < nc; ++k) m[r * nc + k] -= f * m[rank * nc + k];
+        }
+        ++rank;
+    }
+    return rank;
 }
 
-// rebuild() is the off-loop re-solve, and on this hull it must REFUSE: five
-// thrusters produce exactly five axes, so removing one removes an axis and there
-// is no allocation to fall back to. Refusing is the answer; pretending is not.
-static void test_rebuild_refuses_when_a_dof_is_lost() {
-    printf("\nrebuild() after a thruster loss: REFUSE, do not improvise\n");
-    check(begin(frames::CLASS_MONGLA5), "begin");
-    bool dead_lat[ALLOC_MAX_THRUSTERS] = { false, true, true, true, true };
-    check(!rebuild(dead_lat), "one lateral tunnel lost -> rebuild() returns false");
-    near(authority(AX_YAW), 0.350f, 1e-5f, "previous solution retained, not corrupted");
-    check(rebuild(nullptr), "restoring full health rebuilds cleanly");
-    near(authority(AX_YAW), 0.350f, 1e-5f, "and authority is unchanged");
-    // The redundant frame is the opposite case: it CAN re-solve around a loss.
+// Build the 6 x N matrix from the public per-thruster wrench, optionally dropping
+// column `skip`. Uses only what a caller can see, so it cannot accidentally test
+// allocator internals.
+static int rank_without(int skip, int n) {
+    float rows[AX_COUNT * ALLOC_MAX_THRUSTERS] = {0};
+    int nc = 0;
+    for (int j = 0; j < n; ++j) {
+        if (j == skip) continue;
+        float w[AX_COUNT];
+        thrusterWrench(j, w);
+        for (int i = 0; i < AX_COUNT; ++i) rows[i * (n - (skip >= 0 ? 1 : 0)) + nc] = w[i];
+        ++nc;
+    }
+    return rank_of(rows, AX_COUNT, nc);
+}
+
+static void test_no_redundancy_is_a_property_of_the_geometry() {
+    printf("\nREDUNDANCY: mongla-5 has none, and the 8-thruster frame does\n");
+    check(begin(frames::CLASS_MONGLA5), "begin(mongla5)");
+    const int full5 = rank_without(-1, 5);
+    printf("        full rank = %d of 6 (roll unactuated)\n", full5);
+    check(full5 == 5, "all five thrusters -> rank 5");
+    bool every_loss_costs_an_axis = true;
+    for (int j = 0; j < 5; ++j) {
+        const int r = rank_without(j, 5);
+        printf("        drop thruster %d -> rank %d %s\n", j, r,
+               r < full5 ? "  <- an AXIS is lost" : "");
+        if (r >= full5) every_loss_costs_an_axis = false;
+    }
+    check(every_loss_costs_an_axis,
+          "⛔ EVERY single-thruster loss costs a whole DOF -- zero redundancy");
+
     check(begin(frames::CLASS_VECTORED8_GEOM), "begin(vectored8_geom)");
-    bool dead_h[ALLOC_MAX_THRUSTERS] = { false, true, true, true, true, true, true, true };
-    check(rebuild(dead_h), "⭐ eight thrusters CAN re-solve around one loss");
-    printf("        yaw authority after the loss: %.4f (was 0.9625)\n", (double)authority(AX_YAW));
-    printf("        ^ THIS is what redundancy buys, and mongla-5 has none of it.\n");
+    const int full8 = rank_without(-1, 8);
+    check(full8 == 6, "eight thrusters -> full 6-DOF rank");
+    bool survives_any_loss = true;
+    for (int j = 0; j < 8; ++j) if (rank_without(j, 8) < full8) survives_any_loss = false;
+    check(survives_any_loss, "⭐ and it keeps all six axes after ANY single loss");
+    printf("        ^ THAT is what redundancy buys. mongla-5 has none of it, so a\n"
+           "          thruster failure is a surface-now event, not a degrade-and-continue one.\n");
 }
 
 // Whatever the demand, no output may leave [-1, 1]. Swept rather than argued.
@@ -248,7 +286,7 @@ static void test_bounds_sweep() {
     for (int p = 0; p < 2; ++p) {
         float d[AX_COUNT] = { V[a], V[b], V[c], V[e], 0.0f, V[f] };
         float out[ALLOC_MAX_THRUSTERS];
-        allocate(d, nullptr, p, out);
+        allocate(d, p, out);
         for (int j = 0; j < 5; ++j) worst = fmaxf(worst, fabsf(out[j]));
         ++n;
     }
@@ -257,7 +295,7 @@ static void test_bounds_sweep() {
     // NaN must not propagate to a single thruster.
     float d[AX_COUNT] = { 0.5f, NAN, 0.2f, 0.1f, 0.0f, -0.3f };
     float out[ALLOC_MAX_THRUSTERS];
-    Result r = allocate(d, nullptr, PRIO_UNIFORM, out);
+    Result r = allocate(d, PRIO_UNIFORM, out);
     bool clean = true;
     for (int j = 0; j < 5; ++j) if (!std::isfinite(out[j])) clean = false;
     check(clean, "a NaN demand reaches NO thruster");
@@ -281,7 +319,7 @@ static void test_vectored8_geom_builds() {
     // Minimum-norm property: the redundant frame must produce the wrench EXACTLY.
     float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS], wr[AX_COUNT];
     d[AX_YAW] = 0.5f; d[AX_SURGE] = 0.5f;
-    allocate(d, nullptr, PRIO_UNIFORM, out);
+    allocate(d, PRIO_UNIFORM, out);
     achieved(out, wr);
     near(wr[AX_YAW],   0.5f * authority(AX_YAW),   1e-4f, "redundant solve is EXACT in yaw");
     near(wr[AX_SURGE], 0.5f * authority(AX_SURGE), 1e-4f, "...and in surge");
@@ -294,10 +332,10 @@ static void test_vectored8_geom_builds() {
 static void test_legacy_class_is_refused() {
     printf("\nFRAME_CLASS 0 stays with mixer.cpp\n");
     check(!begin(frames::CLASS_LEGACY_VECTORED8), "begin(0) returns false");
-    check(!ready(), "allocator stays disabled");
+    check(thrusterCount() == 0, "allocator stays disabled (no thrusters reported)");
     float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS];
     d[AX_YAW] = 1.0f;
-    Result r = allocate(d, nullptr, PRIO_UNIFORM, out);
+    Result r = allocate(d, PRIO_UNIFORM, out);
     check(!r.ok, "allocate() refuses");
     near(out[0], 0.0f, 1e-9f, "and commands nothing");
     check(!begin(99), "an unknown class is refused too");
@@ -312,8 +350,7 @@ int main() {
     test_surge_pitch_coupling();
     test_priority_modes();
     test_groups_stay_independent();
-    test_dead_thruster();
-    test_rebuild_refuses_when_a_dof_is_lost();
+    test_no_redundancy_is_a_property_of_the_geometry();
     test_bounds_sweep();
     test_vectored8_geom_builds();
     test_legacy_class_is_refused();

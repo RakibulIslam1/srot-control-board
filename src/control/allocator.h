@@ -19,10 +19,21 @@
 //      sits 8.06 mm off the Z centreline, so surge carries a real pitch moment;
 //      under the old mixer that arrived as an unexplained pitch disturbance.
 //
-//    * a +-1 pattern cannot express a DEAD thruster. Here availability is an
-//      input: `allocate()` masks the column on the flight loop, and `rebuild()`
-//      re-solves the geometry without it OFF the flight loop. The two differ and
-//      the difference is the honest part -- see `rebuild()`.
+//  ⛔ WHAT THIS DELIBERATELY DOES NOT DO: tolerate a dead thruster. An earlier
+//  version carried `rebuild(avail)` and an `avail` mask on `allocate()`. Both are
+//  DELETED, because on this hull they cannot help and nothing could have called
+//  them:
+//    * the mongla-5 matrix is 5x5 and exactly determined, so removing a column
+//      removes an AXIS -- there is no better allocation to re-solve for;
+//    * nothing on the vehicle can detect a dead thruster yet. ESC presence is
+//      measured on the Pico and never reaches the wire (our upstream PR F /
+//      their #10), so the mask had no possible source;
+//    * and the flight path only ever passed `nullptr`.
+//  So it was a wide interface serving a capability that did not exist. When #10
+//  lands and presence is readable, add it THEN, with the consumer in hand. The
+//  geometric fact it was there to express -- that this hull has no redundancy --
+//  is asserted directly against the matrix in the test, which is a stronger claim
+//  than a function nobody called.
 //
 //  ⛔ UNACTUATED AXES ARE REFUSED, NOT ROUNDED TO ZERO. On mongla-5 every
 //  thruster's line of action passes through the long axis, so no combination
@@ -98,21 +109,6 @@ struct Result {
 // using mixer::mix().
 bool begin(int cls);
 
-// Re-solve the allocation for a changed set of healthy thrusters.
-//
-// ⛔ NOT FROM THE FLIGHT LOOP. This inverts a matrix. Call it from the task that
-// notices the health change, then let the next allocate() use the result.
-//
-// ⚠ AND ON A HULL WITH NO REDUNDANCY, RE-SOLVING MAY NOT HELP. mongla-5's five
-// thrusters produce exactly five axes (determinant 0.1817, condition number
-// 5.71), so losing one does not reduce the quality of the solution -- it removes
-// an axis. rebuild() then returns false, because there is no allocation, and the
-// previous one stays in force. A caller that treats false as "keep flying" is
-// wrong; the correct response is to surface. Passing null restores full health.
-bool rebuild(const bool* avail);
-
-bool  ready();
-int   frameClass();
 const char* frameName();
 int   thrusterCount();
 
@@ -121,27 +117,33 @@ int   thrusterCount();
 unsigned unactuatedMask();
 
 // The largest single-axis wrench this frame can produce with every |output| <= 1.
-// This is the number that makes the six demand channels comparable, and it is
-// worth reading on a bench: on mongla-5 it is sway 2.000, surge 1.000, heave
-// 2.000, pitch 0.519, yaw 0.350, roll 0. A hull whose axes differ by 5.7x is a
-// hull whose per-axis gains must differ by 5.7x, and now that is visible.
+// This is the number that makes the six demand channels comparable: on mongla-5
+// it is sway 2.000, surge 1.000, heave 2.000, pitch 0.519, yaw 0.350, roll 0. A
+// hull whose axes differ by 5.7x is a hull whose per-axis gains must differ by
+// 5.7x -- so this is reported on the wire at boot by mixer::selectFrame(), which
+// is the only way an operator or the companion ever gets to see it.
 float authority(int axis);
 
 // Allocate. `demand[AX_COUNT]` is normalised, -1..1, where 1.0 means "all the
-// authority this hull has on that axis". `avail` may be null (all healthy), else
-// avail[i] false removes thruster i. `out` receives thrusterCount() values in
+// authority this hull has on that axis". `out` receives thrusterCount() values in
 // -1..1; entries past that are zeroed.
 //
 // Deterministic and allocation-free: one N x 6 multiply plus at most two linear
 // passes over the thrusters. No matrix work happens here -- that is all in
 // begin() -- so this is safe at 500 Hz.
-Result allocate(const float demand[AX_COUNT], const bool* avail,
-                int priority, float out[ALLOC_MAX_THRUSTERS]);
+Result allocate(const float demand[AX_COUNT], int priority,
+                float out[ALLOC_MAX_THRUSTERS]);
 
 // The wrench a set of outputs actually produces, in the same units `authority()`
-// reports. This is the readback the anti-windup needs and the wire does not
-// carry: the difference between this and the demand is precisely the charge a
-// PID integrator must NOT accumulate.
+// reports.
+//
+// ⚠ NO FLIGHT CONSUMER, ON PURPOSE, AND THAT IS NOT AN ORPHAN. This is the
+// correctness oracle the native test allocates against: you cannot check an
+// allocator without computing the wrench its outputs produce, and asserting
+// against recorded outputs instead would only prove the code still does what it
+// did. It is also the readback an anti-windup needs (their #20) -- when that
+// lands it has a caller. Kept BECAUSE the test needs it, not in case something
+// might.
 void achieved(const float out[ALLOC_MAX_THRUSTERS], float wrench[AX_COUNT]);
 
 // Column j of the wrench matrix — what thruster j produces at unit output.
