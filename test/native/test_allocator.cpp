@@ -271,6 +271,72 @@ static void test_no_redundancy_is_a_property_of_the_geometry() {
            "          thruster failure is a surface-now event, not a degrade-and-continue one.\n");
 }
 
+// ⭐ NO DEMANDED AXIS IS EVER DRIVEN BACKWARDS. The invariant that makes both
+// priority modes safe to ship, and it is provable rather than lucky:
+//
+//   uniform   u = A*w / max(1, max|A*w|)  -> achieved = w * s, s in (0,1].
+//             A non-negative scale of the demand. Every axis keeps its sign.
+//
+//   attitude  u = ua + s*ut with s in [0,1], where A is the EXACT inverse, so
+//             Br*ua = wa (attitude rows only, zeros elsewhere) and Br*ut = wt.
+//             Achieved = wa + s*wt: attitude exactly, translation scaled by a
+//             NON-NEGATIVE scalar. A non-negative multiple of a vector cannot
+//             oppose it, so translation is degraded but never reversed.
+//
+// ⚠ THIS TEST EXISTS BECAUSE THE FIRST MEASUREMENT OF IT WAS WRONG. A sweep that
+// compared sign(achieved) against sign(demand) reported reversals on 41.9 % of
+// saturating demands -- and every one was a floating-point +0.0 scored against a
+// negative demand. sign(+0.0) is 0.0, but the value that actually came out was
+// +1e-17, whose sign is +1. Requiring a MAGNITUDE (1 % of the demand) before
+// calling something a reversal takes the count to zero, which matches the proof
+// above. A guard that cries wolf gets deleted, and an unsafe allocator would then
+// ship behind it.
+static void test_no_axis_is_ever_driven_backwards() {
+    printf("\nNO AXIS IS EVER DRIVEN BACKWARDS, in either priority mode\n");
+    check(begin(frames::CLASS_MONGLA5), "begin");
+    const float V[4] = { -1.0f, -0.5f, 0.5f, 1.0f };
+    int infeasible = 0, reversals = 0;
+    float worst_ratio = 0.0f;
+    for (int a = 0; a < 4; ++a)
+    for (int b = 0; b < 4; ++b)
+    for (int c = 0; c < 4; ++c)
+    for (int e = 0; e < 4; ++e)
+    for (int f = 0; f < 4; ++f)
+    for (int prio = 0; prio < 2; ++prio) {
+        float d[AX_COUNT] = { V[a], V[b], V[c], V[e], 0.0f, V[f] };
+        float out[ALLOC_MAX_THRUSTERS];
+        Result r = allocate(d, prio, out);
+        if (r.scale_attitude >= 1.0f && r.scale_translation >= 1.0f) continue;  // feasible
+        if (prio == 0) ++infeasible;
+        float wr[AX_COUNT];
+        achieved(out, wr);
+        for (int i = 0; i < AX_COUNT; ++i) {
+            const float want = d[i] * authority(i);
+            if (fabsf(want) < 1e-9f) continue;
+            // A REVERSAL needs a magnitude. 1 % of the demand, so a numerical
+            // zero is not mistaken for thrust in the wrong direction.
+            if (wr[i] * want < 0.0f && fabsf(wr[i]) > 0.01f * fabsf(want)) {
+                ++reversals;
+                const float ratio = fabsf(wr[i]) / fabsf(want);
+                if (ratio > worst_ratio) worst_ratio = ratio;
+                printf("        ⛔ %s: want %+.4f got %+.4f (prio %d)\n",
+                       AXIS_NAME[i], (double)want, (double)wr[i], prio);
+            }
+        }
+    }
+    printf("        %d infeasible demands x 2 priority modes swept\n", infeasible);
+    check(reversals == 0, "no achieved axis opposes its demand by >1 % of magnitude");
+
+    // And the positive half of the claim for attitude-first: it really does meet
+    // the attitude demand exactly, which is the whole reason to accept the trade.
+    float d[AX_COUNT] = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f };   // sway + yaw, infeasible
+    float out[ALLOC_MAX_THRUSTERS], wr[AX_COUNT];
+    allocate(d, PRIO_ATTITUDE, out);
+    achieved(out, wr);
+    near(wr[AX_YAW], authority(AX_YAW), 1e-4f, "attitude-first: yaw met EXACTLY");
+    check(wr[AX_SWAY] >= -1e-6f, "...and sway is reduced, never negative");
+}
+
 // Whatever the demand, no output may leave [-1, 1]. Swept rather than argued.
 static void test_bounds_sweep() {
     printf("\nBOUNDS: no demand, however hostile, can command past the rail\n");
@@ -352,6 +418,7 @@ int main() {
     test_groups_stay_independent();
     test_no_redundancy_is_a_property_of_the_geometry();
     test_bounds_sweep();
+    test_no_axis_is_ever_driven_backwards();
     test_vectored8_geom_builds();
     test_legacy_class_is_refused();
     printf("\n=== %s ===\n", g_fail == 0 ? "ALL PASS" : "FAILURES PRESENT");
