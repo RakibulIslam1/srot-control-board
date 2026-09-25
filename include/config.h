@@ -528,6 +528,13 @@
 // job, which is compensating individual thrusters that are physically wired backwards.
 #define DEF_FRAME_REVERSE       0.0f
 
+// FRAME_CLASS / ALLOC_PRIO — geometric thrust allocation (control/allocator).
+// 0 keeps the compiled +-1 vectored-8 matrix in mixer.cpp, bit for bit. That is the
+// default because it is what has flown; 1 is the mongla-5 hull, whose geometry is
+// measured and whose roll axis is unactuated. See src/control/frames.h.
+#define DEF_FRAME_CLASS         0.0f
+#define DEF_ALLOC_PRIO          0.0f
+
 #define DEF_MAG_FIELD_MIN       8.0f        // uT — below this the sensor is dead/shielded
 #define DEF_MAG_FIELD_MAX       120.0f      // uT — above this something local dominates
 #define DEF_MAG_DECL            0.4f        // deg, E positive (~0.4 E for Bangladesh)

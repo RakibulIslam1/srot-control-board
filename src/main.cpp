@@ -21,6 +21,7 @@
 #include "state_types.h"
 #include "tasks/tasks.h"
 #include "comms/params.h"
+#include "control/mixer.h"
 #include "comms/ui_log.h"
 #include "control/calibration.h"
 
@@ -127,6 +128,11 @@ void setup() {
     // the board via DTR→EN).
     params::init();
     calibration::loadFromNVS();
+
+    // Thrust allocation, AFTER params (it reads FRAME_CLASS) and BEFORE any task can
+    // mix a demand. A class that will not solve falls back to the legacy matrix and
+    // says so on the wire -- see mixer::selectFrame().
+    mixer::selectFrame((int)lroundf(g_params.frame_class));
 
     // Surface the boot reason on the OLED log ONLY for a fault reset (BROWNOUT/TASK_WDT/
     // PANIC). A normal POWERON/SW boot is not shown — else the stale "Boot: POWERON" line
