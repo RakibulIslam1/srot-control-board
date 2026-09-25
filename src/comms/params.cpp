@@ -196,6 +196,10 @@ static const Desc SCALARS[] = {
     { "TRIM_LEAK",      "TRIM_LEAK",      &g_params.trim_leak,      DEF_TRIM_LEAK },
     { "TRIM_MAX",       "TRIM_MAX",       &g_params.trim_max,       DEF_TRIM_MAX },
 
+    // Thrust allocation — see control/frames.h and control/allocator.h.
+    { "FRAME_CLASS",    "FRAME_CLASS",    &g_params.frame_class,    DEF_FRAME_CLASS },
+    { "ALLOC_PRIO",     "ALLOC_PRIO",     &g_params.alloc_prio,     DEF_ALLOC_PRIO },
+
     { "BUZZ_MASK",      "BUZZ_MASK",      &g_params.buzz_mask,      DEF_BUZZ_MASK },
     { "THR_BEEP_EN",    "THR_BEEP_EN",    &g_params.thr_beep_en,    DEF_THR_BEEP_EN },
     { "BUZZ_DUTY",      "BUZZ_DUTY",      &g_params.buzz_duty,      DEF_BUZZ_DUTY },
