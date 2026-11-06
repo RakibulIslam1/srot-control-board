@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "comms/mav_commands.h"
+#include "tasks/tasks.h"      // announceBoot()
 #include "comms/mav_stream.h"
 #include "comms/params.h"
 #include "comms/mission.h"
@@ -567,6 +568,9 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
         case MAV_CMD_REQUEST_MESSAGE:
             if ((uint32_t)p[0] == MAVLINK_MSG_ID_AUTOPILOT_VERSION) {
                 mav_stream::sendAutopilotVersion();
+            } else if ((uint32_t)p[0] == MAVLINK_MSG_ID_STATUSTEXT) {
+                // Repeat the boot burst for a companion that missed it.
+                announceBoot();
             }
             return MAV_RESULT_ACCEPTED;
 
