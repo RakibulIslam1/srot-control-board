@@ -18,17 +18,14 @@
 // Reset reason captured in main.cpp setup().
 extern const char* g_reset_reason;
 
-void Task_MAVLink(void* pv) {
-    const TickType_t period = pdMS_TO_TICKS(1000 / TASK_MAVLINK_HZ);
-    TickType_t last = xTaskGetTickCount();
-
-    // Emit a HEARTBEAT immediately so QGC detects the vehicle right after the
-    // USB-DTR reset, then announce the SROT identity + the reset reason (this is
-    // the key diagnostic: a "RST: TASK_WDT/BROWNOUT/PANIC" arriving on every
-    // reconnect proves the board is rebooting, and says why).
-    mav_stream::sendHeartbeatNow();
-    mav_stream::sendBootIdentity();
-    mav_stream::sendAutopilotVersion();
+// The boot announcements: the reset reason first, then every notice that
+// changes how the vehicle behaves (a defaults reset, an NVS reformat, the
+// calibration state, the migrations). Sent once at boot, and AGAIN on
+// MAV_CMD_REQUEST_MESSAGE(STATUSTEXT) -- a companion that connects after the
+// board booted (any link without the USB auto-reset) otherwise never learns
+// that the pilot gain was reset to half. Runs on this task either way: the
+// command handler is called from the loop below.
+void announceBoot() {
     {
         char rst[40];
         snprintf(rst, sizeof(rst), "RST: %s", g_reset_reason);
@@ -139,6 +136,20 @@ void Task_MAVLink(void* pv) {
         mav_stream::sendStatusText(MAV_SEVERITY_WARNING,
                                    "PM2_SRC=1 has no 2nd ADC - using ESP-NOW; set it to 2");
     }
+}
+
+void Task_MAVLink(void* pv) {
+    const TickType_t period = pdMS_TO_TICKS(1000 / TASK_MAVLINK_HZ);
+    TickType_t last = xTaskGetTickCount();
+
+    // Emit a HEARTBEAT immediately so QGC detects the vehicle right after the
+    // USB-DTR reset, then announce the SROT identity + the reset reason (this is
+    // the key diagnostic: a "RST: TASK_WDT/BROWNOUT/PANIC" arriving on every
+    // reconnect proves the board is rebooting, and says why).
+    mav_stream::sendHeartbeatNow();
+    mav_stream::sendBootIdentity();
+    mav_stream::sendAutopilotVersion();
+    announceBoot();
 
     for (;;) {
         // Drain all pending inbound messages.
