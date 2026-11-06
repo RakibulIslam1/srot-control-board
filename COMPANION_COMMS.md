@@ -1,6 +1,6 @@
-# JETSON ↔ AUV Communications Reference (SROT)
+# Companion ↔ AUV Communications Reference (SROT)
 
-The complete contract the Jetson ("Mongla" ROS2 workspace, `duburi_ws`) uses to command the SROT
+The complete contract the companion computer (a Raspberry Pi 5 running the Mongla ROS 2 workspace) uses to command the SROT
 flight controller (ESP32). Everything is **MAVLink 2**; nothing here needs a custom dialect — the
 one custom verb (`SROT_MOVE`) rides inside a standard `COMMAND_LONG`.
 

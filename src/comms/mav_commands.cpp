@@ -13,7 +13,7 @@
 #include "config.h"
 #include "state_types.h"
 
-// Custom high-level move command (COMMAND_LONG, no dialect regen). See docs/JETSON_COMMS.md.
+// Custom high-level move command (COMMAND_LONG, no dialect regen). See COMPANION_COMMS.md.
 #ifndef MAV_CMD_SROT_MOVE
 #define MAV_CMD_SROT_MOVE 31000
 #endif
@@ -322,7 +322,7 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
         case MAV_CMD_SROT_MOVE: {
             // High-level Jetson move. p1=type(0..9) p2=primary p3=speed|yawrate
             //   p4=turn submode | arc yawrate  p5=timeout_s. Auto-enters AUTO; preempts.
-            //   Braking is on-board. See docs/JETSON_COMMS.md.  (wire type + 1 = movement::Type)
+            //   Braking is on-board. See COMPANION_COMMS.md.  (wire type + 1 = movement::Type)
             int wire = (int)p[0];
             if (wire < 0 || wire > 9) return MAV_RESULT_DENIED;
             {

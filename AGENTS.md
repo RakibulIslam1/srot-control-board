@@ -36,9 +36,9 @@ specified but not yet implemented.
 
 | File | What it is |
 |---|---|
-| `JETSON_COMMS.md` | the wire protocol the companion codes against — **treat as a contract** |
+| `COMPANION_COMMS.md` | the wire protocol the companion codes against — **treat as a contract** |
 | `DUBURI_WS_INTEGRATION.md` | the companion-side migration guide |
-| `JETSON_FEEDBACK.md` | findings sent **to us** by the companion team, ranked by what blocks them |
+| `COMPANION_FEEDBACK.md` | findings sent **to us** by the companion team, ranked by what blocks them |
 | `VISION_API.md` | the vision-guided control spec (not yet implemented) |
 | `AUDIT.md` | three rounds of defect findings + what is deferred and why |
 | `ROADMAP.md` | phase status and the ranked upgrade list |
@@ -164,6 +164,6 @@ and say plainly in the PR what you could **not** verify from your side.
 ## When your change crosses a repo boundary
 
 1. Say so explicitly in the commit message, naming the other repo.
-2. Update `JETSON_COMMS.md` — it is the contract the companion codes against.
+2. Update `COMPANION_COMMS.md` — it is the contract the companion codes against.
 3. Expect `duburi_ws`'s drift test to fail until its mirror is updated; that is the design.
 4. If it changes a parameter's meaning or units, note whether existing tuning survives.

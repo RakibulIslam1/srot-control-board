@@ -21,7 +21,7 @@ static float    s_target_yaw = 0;               // rad (absolute turn goal)
 // Progress support for the two CLOSED-LOOP phases. TURN and DIVE finish on an error test, not
 // a timer, so there is no duration to divide by — they both used to fall through progress()'s
 // `default:` and report a constant 0.5. Those are the two verbs a mission most wants to wait
-// on (JETSON_FEEDBACK.md §6), so MV_PROG and COMMAND_ACK.progress carried no information
+// on (COMPANION_FEEDBACK.md §6), so MV_PROG and COMMAND_ACK.progress carried no information
 // exactly where they mattered. `s_span` is the distance to cover latched at start; `s_remain`
 // is refreshed by update() from the same error the completion test already computes.
 static float    s_span = 0, s_remain = 0;
@@ -64,7 +64,7 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
     // Capture the OUTGOING leg's travel axis and speed before they are cleared: STOP has to
     // brake along the axis it is stopping, and this reset ran before the type switch, so
     // PH_BRAKE computed `-0 * gain * 0` = zero thrust. "Brake to a halt" was a coast.
-    // (JETSON_FEEDBACK.md §2 — and only the wire verb was affected, because abort() never
+    // (COMPANION_FEEDBACK.md §2 — and only the wire verb was affected, because abort() never
     // touched these fields, so internal preemption braked correctly the whole time.)
     const int8_t prev_uf = s_uf, prev_ul = s_ul;
     const float  prev_speed = s_cur_speed;
@@ -97,12 +97,12 @@ void start(Type t, float primary, float speed, uint8_t submode, float aux,
             s_span = s_remain = fabsf(wrapPi(s_target_yaw - cur_yaw));   // for progress()
             s_phase = PH_TURN; return;
         case Type::DIVE:
-            // Clamp to at or below the surface. JETSON_COMMS.md documented DIVE p2 as
+            // Clamp to at or below the surface. COMPANION_COMMS.md documented DIVE p2 as
             // "clamped at >= 0 — you cannot command above the surface" and it was not:
             // depth::setTarget() has no clamp either, and the AUTO path never reaches the
             // one inside depth::update(). A negative target produced sustained ascent — and
             // because the runaway guard references depth::target(), the guard TRACKED the
-            // bad setpoint instead of catching it. (JETSON_FEEDBACK.md §7.)
+            // bad setpoint instead of catching it. (COMPANION_FEEDBACK.md §7.)
             s_depth_goal = (primary > 0.0f) ? primary : 0.0f;
             s_span = s_remain = fabsf(s_depth_goal - cur_depth);          // for progress()
             s_phase = PH_DIVE; return;

@@ -7,7 +7,7 @@ Pixhawk/ArduSub.
 **Naming:** the *board* is **SROT**; the *firmware* is **Hengla**. `MAV_CMD_SROT_MOVE` keeps its
 name and its wire id (31000) — it is board-level, and renaming it would break every client.
 
-**Read first:** [`JETSON_COMMS.md`](JETSON_COMMS.md) — the authoritative wire contract. This document
+**Read first:** [`COMPANION_COMMS.md`](COMPANION_COMMS.md) — the authoritative wire contract. This document
 is the *migration plan*; that one is the *interface*.
 
 ---
@@ -38,7 +38,7 @@ companion must assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affe
 2. **A move now always reaches exactly one terminal result** — `ACCEPTED`, `CANCELLED`, `FAILED` or
    `DENIED`. Three separate hang paths were fixed. **If you write the action client to wait only for
    `ACCEPTED`, it will still hang**, because preemption resolves as `CANCELLED` and an unstartable
-   move as `FAILED`. See the terminal-result table in `JETSON_COMMS.md` §5.
+   move as `FAILED`. See the terminal-result table in `COMPANION_COMMS.md` §5.
 3. **Preemption is now observable.** Sending a new `SROT_MOVE` while one is running resolves the old
    one `CANCELLED`. This is the documented way to interrupt, and your action server should map it to
    *abort*, not *error*.
@@ -227,7 +227,7 @@ STABILIZE with a `STATUSTEXT`. Handle that rejection rather than assuming the mo
 
 ### 4.3 The move verb
 
-See `JETSON_COMMS.md` §5 for the full parameter table. The mapping onto `Move.action`:
+See `COMPANION_COMMS.md` §5 for the full parameter table. The mapping onto `Move.action`:
 
 The `p1` wire type is **not** the internal `movement::Type` — the board adds 1. Send the wire value:
 
@@ -294,7 +294,7 @@ failure, and do not treat it as one of the four terminal results.
   relays, gain). Only relevant if a human joystick is in the loop.
 - Parameters are standard `PARAM_SET`/`PARAM_REQUEST_*`. **190+ params take 10-15 s to download, and
   during that window the vehicle sends only `HEARTBEAT` and `ESC_STATUS`** — see the trap in
-  `JETSON_COMMS.md` §6. Do not download params mid-mission.
+  `COMPANION_COMMS.md` §6. Do not download params mid-mission.
 
 ---
 
@@ -371,7 +371,7 @@ vision servoing · payload sequencing · logging.
       - Force the SURFACE failsafe (e.g. trip the leak input with `LEAK_EN = 1`) at a simulated depth
         and confirm the demand is **ascend**. This is the path that was driving the vehicle *down*.
 - [ ] **Terminal-result handling in the action client** covers `CANCELLED`, `FAILED` and `DENIED`, not
-      just `ACCEPTED` — otherwise a preempted or unstartable move hangs the action. `JETSON_COMMS.md` §5.
+      just `ACCEPTED` — otherwise a preempted or unstartable move hangs the action. `COMPANION_COMMS.md` §5.
 - [ ] **Goal validation Python-side** rejects `NaN`/`inf` before sending. The board now rejects them
       too (`DENIED`), but failing in your own node gives a far better error.
 - [ ] **`THR_TRIM_EN = 1` (in water)** if you need repeatable distance — it is **off** by default and
@@ -479,7 +479,7 @@ Board-side reference: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`ALGORITHMS.md`](
 
 Two documents are specifically about this integration and are not linked above:
 
-- [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) — findings sent to the firmware team *by* the companion
+- [`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md) — findings sent to the firmware team *by* the companion
   team, ranked by what blocks them. Read it before filing anything.
 - [`VISION_API.md`](VISION_API.md) — a **specification, not an implementation**. It proposes moving
   the vision servo loop on-board (bearings in, 500 Hz loop on the board), which would contradict §2

@@ -146,7 +146,7 @@ Outer angle loop: `error × ATC_ANG_*_P → desired rate`. Inner rate loop:
 | `RPM_LOOP` | **0** | **Control loop: 0 = open-loop (recommended, the default) · 1 = closed-loop RPM (PI).** ⚠ **Do not set this to 1 for stabilisation.** An RPM setpoint loop inside the attitude path makes the vehicle oscillate — a 1° disturbance produces spin-up/stop/spin-up cycling. That is architectural, not a tuning problem (thruster dynamics are a slow nonlinear lag; no mainstream flight or ROV firmware closes a thrust loop on RPM). Use `THR_TRIM_EN` for voltage-independent thrust instead. Closed-loop needs bidir-DShot telemetry (Bluejay). Pushed live to the Pico; boot default is `THR_RPM_CLOSED_LOOP` (`config.h:218`). |
 | `DSHOT_BIDIR` | 1 | **DShot output mode: 1 = bidirectional (inverted, RPM telemetry → detection + closed loop) · 0 = normal DShot (any DShot ESC, e.g. stock BLHeli_S, spins but no RPM).** Pushed to the Pico; a change re-creates the PIO drivers **while disarmed**. Use 0 to bench a non-bidir ESC; 1 for the real setup. |
 
-### AUTO movement (mode AUTO=23; Jetson-offloaded moves — see ALGORITHMS.md §11, JETSON_COMMS.md)
+### AUTO movement (mode AUTO=23; Jetson-offloaded moves — see ALGORITHMS.md §11, COMPANION_COMMS.md)
 Timer-based (duration × speed); no distance sensor/estimate.
 
 ⚠ **Distance is NOT voltage-independent at defaults, and a timed move travels further on a full

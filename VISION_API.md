@@ -4,7 +4,7 @@
 side against firmware **`9384e6b`**, which is the build currently flashed. Every firmware
 claim below carries a `file:line` so you can verify rather than trust.
 
-This is the concrete form of the ask in [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) §11.
+This is the concrete form of the ask in [`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md) §11.
 
 ---
 
@@ -276,7 +276,7 @@ Requirements:
   changing; always use `vis_stamp_ms`.**
 - Prolonged staleness (say > 2 s) should end the primitive with a terminal ACK, not hang.
   Companion-side we treat "no terminal ACK" as the failure mode we cannot recover from
-  ([`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) §1).
+  ([`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md) §1).
 
 ### 4.2 Depth must ramp, or the vehicle disarms itself
 
@@ -290,7 +290,7 @@ vehicle mid-task.
 vision primitive must ramp the same way.
 
 Also note `depth::setTarget()` has **no clamp** (`depth_control.cpp:20`), so the primitive must
-clamp its own target to a sane band ≥ 0 — see [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) §7.
+clamp its own target to a sane band ≥ 0 — see [`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md) §7.
 
 > ⛔ **The depth loop has never run closed.** The sign was inverted until 2026-07-30 and the
 > Bar30 was not fitted while it was written (`AUDIT.md:35-73`). The vision depth axis sits

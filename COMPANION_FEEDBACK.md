@@ -1,7 +1,7 @@
-# Jetson-side feedback on Hengla v0.2.0
+# Companion-side feedback on Hengla v0.2.0
 
 Written by the **`duburi_ws` (Mongla)** side — the ROS 2 companion that drives this board
-over MAVLink. Read alongside `DUBURI_WS_INTEGRATION.md` and `JETSON_COMMS.md`, which are
+over MAVLink. Read alongside `DUBURI_WS_INTEGRATION.md` and `COMPANION_COMMS.md`, which are
 the contract this document reports against.
 
 **Reviewed at:** `8cb4203` (Round 3). Firmware read in full: `mav_commands.cpp`,
@@ -21,7 +21,7 @@ paying every mission, not a reason to deprioritise. Each item names the file:lin
 
 ## 1. A move can be stranded on `IN_PROGRESS` forever — the terminal-ACK guarantee is not held
 
-**Severity: highest.** `JETSON_COMMS.md:157` states *"Every command reaches exactly one
+**Severity: highest.** `COMPANION_COMMS.md:157` states *"Every command reaches exactly one
 terminal result. That is now guaranteed."* Our whole action-server design rests on that
 sentence, and it is not currently true.
 
@@ -63,7 +63,7 @@ restore the guarantee.
 
 ## 2. `MOVE_STOP` applies **zero** braking thrust — "brake to a halt" is a coast
 
-`JETSON_COMMS.md:108` documents **stop** as *"(brake to a halt)"*. It does not brake.
+`COMPANION_COMMS.md:108` documents **stop** as *"(brake to a halt)"*. It does not brake.
 
 `movement::start()` zeroes the axis signs and the speed **before** the type switch:
 
@@ -167,7 +167,7 @@ Related: **no `COMMAND_CANCEL`.** The only way to cancel a move is to send anoth
 enum { PH_IDLE=0, PH_CRUISE, PH_BRAKE, PH_TURN, PH_DIVE, PH_STYLE, PH_HOLD, PH_DONE };
 ```
 
-`HOLD = 6`, `DONE = 7`. Both `JETSON_COMMS.md:277` and `DUBURI_WS_INTEGRATION.md:217`
+`HOLD = 6`, `DONE = 7`. Both `COMPANION_COMMS.md:277` and `DUBURI_WS_INTEGRATION.md:217`
 document **`6 = done`**. A client decoding `MV_STATE` reads every station-keep leg as
 complete — and station-keep is precisely what a companion holds a position with while it
 aligns a camera or fires a payload.
@@ -183,7 +183,7 @@ fraction from the angle/depth remaining — both are already computed for the co
 
 ## 7. `DIVE` — `p3` ignored, and the target is not clamped ≥ 0 despite the docs
 
-`JETSON_COMMS.md:247` states DIVE `p2` is *"**Clamped at ≥ 0** — you cannot command above
+`COMPANION_COMMS.md:247` states DIVE `p2` is *"**Clamped at ≥ 0** — you cannot command above
 the surface."* It is not:
 
 - `movement.cpp:84` is a bare `s_depth_goal = primary;`
@@ -258,20 +258,20 @@ cost us time, all verified against `8cb4203`:
 | Claim | Where | Reality |
 |---|---|---|
 | "SROT presents as ArduSub 4.1.0" | `ARCHITECTURE.md:134` | `MAV_AUTOPILOT_GENERIC` (`mav_stream.cpp:178`); AUDIT B10 deleted the spoof |
-| "Every command reaches exactly one terminal result" | `JETSON_COMMS.md:157` | Item 1 above |
-| "stop … (brake to a halt)" | `JETSON_COMMS.md:108` | Item 2 above |
-| "DIVE p2 … Clamped at ≥ 0" | `JETSON_COMMS.md:247` | Item 7 above |
-| "6 = done" for `MV_STATE` | `JETSON_COMMS.md:277`, `DUBURI_WS_INTEGRATION.md:217` | `HOLD=6`, `DONE=7` |
-| "a new command preempts the running one (a quick brake first)" | `JETSON_COMMS.md:86` | `task_control_loop.cpp:398-402` calls `movement::start()` with no `abort()` between — no null-momentum phase |
+| "Every command reaches exactly one terminal result" | `COMPANION_COMMS.md:157` | Item 1 above |
+| "stop … (brake to a halt)" | `COMPANION_COMMS.md:108` | Item 2 above |
+| "DIVE p2 … Clamped at ≥ 0" | `COMPANION_COMMS.md:247` | Item 7 above |
+| "6 = done" for `MV_STATE` | `COMPANION_COMMS.md:277`, `DUBURI_WS_INTEGRATION.md:217` | `HOLD=6`, `DONE=7` |
+| "a new command preempts the running one (a quick brake first)" | `COMPANION_COMMS.md:86` | `task_control_loop.cpp:398-402` calls `movement::start()` with no `abort()` between — no null-momentum phase |
 | `RPM_LOOP` default 1, `RPM_MAX` 4000, `MOT_SPIN_MIN` 0.10 | `PARAMETERS.md:105-109,135` | 0, 3600, 0.02 (`config.h:380,445,464`) |
 | ~~"constant distance comes from the Pico RPM closed loop (now enabled)"~~ **FIXED 2026-08-03** | `PARAMETERS.md`, `ALGORITHMS.md §11.1`, `ARCHITECTURE.md` | You were right, and it was worse than a wrong mechanism: `RPM_LOOP`, `THR_TRIM_EN` **and** `MOT_BAT_V_MAX` are all 0 at defaults, so **no** voltage compensation is active and a timed move really does travel further on a full pack. All three docs now say so and list the two supported routes. |
-| "191 params" / "190+" / "113+26+80" | `mav_commands.cpp:48`, `JETSON_COMMS.md:231`, `PARAMETERS.md:11` | **227** (147 scalar rows incl. 26 CAL + 80 servo) |
+| "191 params" / "190+" / "113+26+80" | `mav_commands.cpp:48`, `COMPANION_COMMS.md:231`, `PARAMETERS.md:11` | **227** (147 scalar rows incl. 26 CAL + 80 servo) |
 | "UART2 … 2 Mbaud" | `HARDWARE.md:218`, `thruster_link_proto.h:7`, `pico/main.cpp:6` | 1 Mbaud (`config.h:191`) |
 | `docs/T200_PROFILE.md` | referenced by `docs/ESC_FLASHING.md` step 3 and by the flasher repo | **file does not exist** |
 
 Also: the **fifth** dispatch outcome, `MAV_RESULT_TEMPORARILY_REJECTED` (state-mutex miss at
 `mav_commands.cpp:287`, `:376`, and now `:422` on the payload path), is not in the
-four-result table in `JETSON_COMMS.md:164-172`. A client that treats only the documented
+four-result table in `COMPANION_COMMS.md:164-172`. A client that treats only the documented
 four as terminal will wait out its full deadline on a command that was simply refused. We
 found this by reading `dispatchCommand()`, not the docs.
 

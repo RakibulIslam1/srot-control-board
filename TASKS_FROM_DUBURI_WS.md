@@ -11,7 +11,7 @@ well.
 
 > Background, if you want the reasoning rather than the steps:
 > [`DUBURI_WS_HANDOFF_2026-08-01.md`](DUBURI_WS_HANDOFF_2026-08-01.md) (what we changed and why),
-> [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) Round 6 reply (our answers to your three questions).
+> [`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md) Round 6 reply (our answers to your three questions).
 
 ---
 

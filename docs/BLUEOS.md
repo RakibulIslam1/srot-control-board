@@ -70,7 +70,7 @@ revived. See [`AUDIT.md`](../AUDIT.md) B10.
   Before that it is silent — not zero.
 - **Depth sign.** Internally depth is positive-down metres; on the wire `VFR_HUD.alt = −depth`,
   i.e. **negative underwater**, per MAVLink convention. Full table in
-  [`JETSON_COMMS.md`](../JETSON_COMMS.md).
+  [`COMPANION_COMMS.md`](../COMPANION_COMMS.md).
 
 ## If you decide you want the ArduSub pages back
 
