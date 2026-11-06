@@ -78,10 +78,10 @@ failsafe have no data and stay inert.
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Dual-core design, the control loop, flight modes, tuning & calibration |
 | **[ALGORITHMS.md](ALGORITHMS.md)** | Every control algorithm in full — the math, step by step |
 | **[PARAMETERS.md](PARAMETERS.md)** | Every parameter, defaults, units, and the backup workflow |
-| **[JETSON_COMMS.md](JETSON_COMMS.md)** | The companion-computer contract — messages, rates, units, sign conventions |
+| **[COMPANION_COMMS.md](COMPANION_COMMS.md)** | The companion-computer contract — messages, rates, units, sign conventions |
 | **[DUBURI_WS_INTEGRATION.md](DUBURI_WS_INTEGRATION.md)** | Porting the duburi_ws ROS 2 stack onto this board |
 | **[VISION_API.md](VISION_API.md)** | ⭐ Vision-guided control spec — bearings in, 500 Hz loop on-board (**not yet implemented**) |
-| **[JETSON_FEEDBACK.md](JETSON_FEEDBACK.md)** | Findings sent to us *by* the companion team, ranked by what blocks them |
+| **[COMPANION_FEEDBACK.md](COMPANION_FEEDBACK.md)** | Findings sent to us *by* the companion team, ranked by what blocks them |
 | **[DOC_DRIFT_AND_DESIGN_REVIEW_2026-08-03.md](DOC_DRIFT_AND_DESIGN_REVIEW_2026-08-03.md)** | Design review from the new owner: doc-vs-code drift with file:line (ARCHITECTURE.md is the stalest and lists 7 modes where there are 11, omitting AUTO), the undocumented `thrust_trim` cascade stage, the `RPM_LOOP` contradiction, and the decisions worth preserving. **No behaviour changed** |
 | **[BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md](BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md)** | ⛔⛔ **READ FIRST — the water test is blocked.** The Bar30 is producing NOISE (317..874 mbar on a still bench) while the board reports it HEALTHY, which saturates the depth loop and **explains the arming vertical spin-up completely**. Measured on the vehicle, disarmed |
 | **[TASKS_FROM_DUBURI_WS.md](TASKS_FROM_DUBURI_WS.md)** | ⭐⭐ **START HERE — the run sheet.** Board-on-the-bench checks (§0: behaviour rev + the `GAIN 0.500` re-write), then the depth-gate wording fix, `FS_GCS_SYSID` (now unblocked — the companion moved to compid 191), and LEAK → `SYS_STATUS`. Ends with how to PR back |

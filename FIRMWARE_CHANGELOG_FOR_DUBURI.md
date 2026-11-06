@@ -1,7 +1,7 @@
 # Firmware changes for `duburi_ws` — 2026-08-01 (Round 6)
 
 **Written for the companion team.** This is our reply to
-[`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md). Every item you raised is answered below: fixed,
+[`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md). Every item you raised is answered below: fixed,
 deferred with a reason, or bounced back as a question. Full detail in [`AUDIT.md`](AUDIT.md)
 R35–R43.
 
@@ -75,7 +75,7 @@ neutral within 1.5 s. Previously it held the last value indefinitely.
 We tried. The obvious fix — a `FS_GCS_SYSID` parameter naming the required source — **cannot
 work**, and shipping it would have been worse than shipping nothing:
 
-- `JETSON_COMMS.md:30` tells companions to connect as `source_system=255, source_component=190`.
+- `COMPANION_COMMS.md:30` tells companions to connect as `source_system=255, source_component=190`.
 - Our LoRa bridge synthesises its filler heartbeat as **255/190** — the same identity.
 
 So a parameter naming "the Jetson" as 255/190 also matches the bridge, and your exact scenario
@@ -129,7 +129,7 @@ tell us if it does not.
 
 ### §6 — `MV_STATE` off-by-one and dead progress — **FIXED (both halves)**
 
-- Docs corrected: **6 is HOLD, 7 is DONE**. `JETSON_COMMS.md` was the one still wrong; we had
+- Docs corrected: **6 is HOLD, 7 is DONE**. `COMPANION_COMMS.md` was the one still wrong; we had
   already fixed `DUBURI_WS_INTEGRATION.md`.
 - **`progress()` now returns real values for TURN and DIVE.** They latch the span at start (angle
   or depth to cover) and divide the live remaining error — which both completion tests already
@@ -171,7 +171,7 @@ Two things to know:
 
 ### §10 — documentation drift — **FIXED**
 
-Corrected in `JETSON_COMMS.md`: the `MV_STATE` table; `TEMPORARILY_REJECTED` documented as the
+Corrected in `COMPANION_COMMS.md`: the `MV_STATE` table; `TEMPORARILY_REJECTED` documented as the
 fifth, **non-terminal** reply with an explicit "retry it"; the preemption "a quick brake first"
 claim removed (there is no brake phase between commands — a preempting **`stop`** brakes, a
 preempting *move* does not); parameter count corrected to **227**; UART2 corrected from 2 Mbaud

@@ -387,7 +387,7 @@ gap. When disarmed, every thruster gets DShot 0 (stopped).
 One state machine offloads the Jetson's motion: it turns a high-level verb (forward / back /
 strafe / turn / dive / arc / style / stop / hold) into thruster demands, with heading- and
 depth-hold running around it in the control loop. Commanded over `MAV_CMD_SROT_MOVE` — see
-`JETSON_COMMS.md`.
+`COMPANION_COMMS.md`.
 
 ### 11.1 Timer-based cruise — and why distance is NOT voltage-independent at defaults
 Translation runs the axis at a **speed** `S ∈ [0, MOVE_CRUISE_MAX]` for a **duration** — the system
@@ -446,5 +446,5 @@ brake tail) feeds the `COMMAND_ACK` progress stream (`MV_STATE`/`MV_PROG`/`MV_TY
 
 *Code map: estimation `drivers/bno085.cpp`; control `control/{attitude_control,depth_control,
 pid,feedforward,mixer,calibration,autotune,movement}.cpp`; loop `tasks/task_control_loop.cpp`; Pico
-`src/pico/main.cpp`. Parameters: `PARAMETERS.md`. Jetson comms: `JETSON_COMMS.md`. Wiring:
+`src/pico/main.cpp`. Parameters: `PARAMETERS.md`. Jetson comms: `COMPANION_COMMS.md`. Wiring:
 `HARDWARE.md`.*

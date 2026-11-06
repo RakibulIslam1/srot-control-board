@@ -5,7 +5,7 @@
 # Round 6 (2026-08-01) — the contract the companion is built on
 
 Not our findings. The `duburi_ws` companion team read this firmware in full and wrote
-[`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md), filtered to one question: *what does the companion
+[`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md), filtered to one question: *what does the companion
 hit that it cannot fix from its own side?* Six of their eleven items are real defects that five
 rounds of our own auditing missed — because we were auditing the vehicle in isolation and these
 only bite across the wire.
@@ -39,7 +39,7 @@ Fixed with two changes, both needed:
 
 ## R36 — `MOVE_STOP` applied zero braking thrust
 
-`JETSON_COMMS.md` documented stop as "brake to a halt". `movement::start()` zeroed `s_uf`,
+`COMPANION_COMMS.md` documented stop as "brake to a halt". `movement::start()` zeroed `s_uf`,
 `s_ul` and `s_speed` **before** the type switch, so `PH_BRAKE` computed `-0 × gain × 0` = zero.
 The brake *duration* was correct — it used the leftover ramped speed — so the vehicle held zero
 translation for exactly the right interval and coasted.
@@ -90,7 +90,7 @@ vehicle that is still deep.
 
 ## R39 — `DIVE` was not clamped to at-or-below the surface
 
-`JETSON_COMMS.md` claimed DIVE `p2` was "clamped at ≥ 0 — you cannot command above the surface".
+`COMPANION_COMMS.md` claimed DIVE `p2` was "clamped at ≥ 0 — you cannot command above the surface".
 It was not: `movement.cpp` had a bare assignment, `depth::setTarget()` has no clamp, and the one
 inside `depth::update()` sits in a stick-deadband branch that AUTO never enters.
 
@@ -209,7 +209,7 @@ without running the board; R45 was a safeguard that could not run where the dang
 - The first pass at R36 removed the `s_uf`/`s_ul` reset entirely, which would have leaked the
   previous leg's travel axis into every subsequent verb. Narrowed to capture-and-restore.
 - The adversarial review found the proposed `FS_GCS_SYSID` fix for the GCS-failsafe-source
-  problem **cannot work**: `JETSON_COMMS.md` tells companions to connect as 255/190 and our own
+  problem **cannot work**: `COMPANION_COMMS.md` tells companions to connect as 255/190 and our own
   LoRa bridge synthesises 255/190, so a parameter naming the required source matches both and
   the dead-Jetson case survives untouched. **Deferred rather than shipped**, because a fix that
   looks like it closes a failsafe gap and does not is worse than no fix. Resolving it needs a

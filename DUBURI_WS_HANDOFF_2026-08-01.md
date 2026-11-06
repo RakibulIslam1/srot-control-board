@@ -8,7 +8,7 @@ Your PR is merged. This is what changed on our side because of it, the **one fir
 we owe you**, and what we need before the vehicle goes in water.
 
 > **Read [`FIRMWARE_CHANGELOG_FOR_DUBURI.md`](FIRMWARE_CHANGELOG_FOR_DUBURI.md) and the Round 6
-> reply at the end of [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) first** — this document assumes
+> reply at the end of [`COMPANION_FEEDBACK.md`](COMPANION_FEEDBACK.md) first** — this document assumes
 > both. Nothing here changes a wire constant, so `test_srot_protocol_drift.py` stays green.
 
 ---
