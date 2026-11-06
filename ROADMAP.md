@@ -431,7 +431,7 @@ Three problems that surfaced from actually flying the board.
   **Honest limitation, documented everywhere:** this fixes the *reference*, not the *drift*
   (~0.5–3 °/min remains). Fixing drift needs a continuous mag correction, i.e. exactly the motor
   sensitivity the 6-axis fusion exists to avoid.
-- Docs: `PARAMETERS.md` (backup warning, `MAG_*`, `CAL_*`), `JETSON_COMMS.md`
+- Docs: `PARAMETERS.md` (backup warning, `MAG_*`, `CAL_*`), `COMPANION_COMMS.md`
   (**sign-conventions table** — depth positive-down internally, `VFR_HUD.alt = −depth` on the
   wire — plus the heading-lock guarantee), `ALGORITHMS.md` §1/§3, `ARCHITECTURE.md`,
   `bondor/README.md` (the reflash routine).
@@ -598,7 +598,7 @@ Three problems that surfaced from actually flying the board.
   @25 Hz), and a working **SROT Move console** (SROT_MOVE 31000 + ACK feedback).
 - Verified: `npm run typecheck` + `build` clean; a headless codec self-test round-trips a SROT_MOVE
   COMMAND_LONG; ESP32 firmware env still builds (no collision). Phases 2-7 in `bondor/README.md`.
-- Contract Bondor speaks is in `JETSON_COMMS.md`. Queued: LoRa telemetry (Phase 6, needs firmware),
+- Contract Bondor speaks is in `COMPANION_COMMS.md`. Queued: LoRa telemetry (Phase 6, needs firmware),
   mission upload (Phase 7).
 
 ### 2026-07-27 — Constant-distance timed moves (RPM loop on), distance-estimate removed, LoRa retry
@@ -613,7 +613,7 @@ Three problems that surfaced from actually flying the board.
   Now **retries `LoRa.begin()` every ~2 s** while down (a late/loose/reconnected radio comes up with
   no reboot), and on failure logs the raw **REG_VERSION** to the OLED (`LoRa? v=0x00` MISO/power ·
   `0xFF` floating/no-power · `0x12` present→retry catches it); `LoRa OK` on success.
-- Docs updated: `JETSON_COMMS.md`, `ALGORITHMS.md` §11, `PARAMETERS.md`. Builds clean: ESP32 + Pico.
+- Docs updated: `COMPANION_COMMS.md`, `ALGORITHMS.md` §11, `PARAMETERS.md`. Builds clean: ESP32 + Pico.
 
 ### 2026-07-27 — AUTO movement mode: Jetson-offloaded, RPM-braked motion primitives
 - **`FlightMode::AUTO=23`** + **`control/movement`** — one state machine for every high-level verb
@@ -630,7 +630,7 @@ Three problems that surfaced from actually flying the board.
   auto-enters AUTO, streams `COMMAND_ACK` IN_PROGRESS (~3 Hz, progress %) then ACCEPTED on completion
   (drives the ROS Move-action result), plus `MV_STATE/MV_PROG/MV_DIST/MV_TYPE` telemetry.
 - **Params** `MOVE_*` (cruise/accel/brake/depth-rate/yaw-rate/KV); QGC-compat params **kept** for now.
-- **Docs** — new **`JETSON_COMMS.md`** (full Jetson→AUV contract: link, arm, mode, MANUAL_CONTROL,
+- **Docs** — new **`COMPANION_COMMS.md`** (full Jetson→AUV contract: link, arm, mode, MANUAL_CONTROL,
   the `SROT_MOVE` table + ACK contract, telemetry, payload, pymavlink, `MOVE_KV` calibration);
   `ALGORITHMS.md` §11 (move + brake + smooth-dive math); `PARAMETERS.md` MOVE_* group.
 - Builds clean: ESP32 + Pico.

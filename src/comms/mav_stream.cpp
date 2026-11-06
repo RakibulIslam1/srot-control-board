@@ -19,7 +19,7 @@
 extern volatile uint32_t g_stack_hw[6];
 
 #ifndef MAV_CMD_SROT_MOVE
-#define MAV_CMD_SROT_MOVE 31000   // custom high-level move (see docs/JETSON_COMMS.md)
+#define MAV_CMD_SROT_MOVE 31000   // custom high-level move (see COMPANION_COMMS.md)
 #endif
 
 namespace mav_stream {
@@ -161,7 +161,7 @@ static void reportEscNotDetected(const Snap& s) {
 // silently discards any message whose id is missing from its CRC-extra table — no error, no
 // callback — so a standard companion cannot decode it in any dialect, and the board reporting
 // RPM perfectly looks exactly like an ESC or Bluejay fault. The companion verified this on
-// pymavlink 2.4.49 against common/ardupilotmega/all/development (JETSON_FEEDBACK.md §8).
+// pymavlink 2.4.49 against common/ardupilotmega/all/development (COMPANION_FEEDBACK.md §8).
 //
 // ESC_TELEMETRY_1_TO_4 (11030) / _5_TO_8 (11031) are in the ardupilotmega dialect we already
 // vendor and include, carry exactly 4 ESCs each — an exact fit for 8 thrusters — and decode
@@ -643,7 +643,7 @@ static void updateMove(const Snap& s, uint32_t now) {
 // These were hardcoded literals, which made the fixed 10 Hz ATTITUDE the hard ceiling for
 // every loop the companion runs — it could not turn it up for a control loop or down for a
 // slow link, and with neither 511 nor REQUEST_DATA_STREAM (66) implemented there was no
-// standard mechanism at all (JETSON_FEEDBACK.md §5).
+// standard mechanism at all (COMPANION_FEEDBACK.md §5).
 //
 // `ms` is the live interval; `def_ms` is what a `0` request restores. 0 in `ms` means the
 // stream is DISABLED (a -1 request), which is why the send tests below check it.

@@ -198,7 +198,7 @@ static void computeDemands(const LoopIn& in, float dt,
             // unconditional block above and pass in.sp_yaw straight through, so the vehicle
             // ascended while continuing to translate and yaw on whatever the last packet
             // said, indefinitely. A vehicle that has lost its operator should not still be
-            // driving somewhere. (JETSON_FEEDBACK.md §3.)
+            // driving somewhere. (COMPANION_FEEDBACK.md §3.)
             //
             // Belt and braces with the staleness ramp in readInputs(): that handles a sender
             // that went quiet, this handles a sender that is still talking while the vehicle
@@ -456,7 +456,7 @@ void Task_ControlLoop(void* pv) {
                     g_state.cal.routine = CalRoutine::NONE;
             }
             // Leaving AUTO must END the running move, or it is stranded on IN_PROGRESS for
-            // ever and the companion's action hangs. (JETSON_FEEDBACK.md §1 — their highest
+            // ever and the companion's action hangs. (COMPANION_FEEDBACK.md §1 — their highest
             // severity item, and it fires exactly when the vehicle is already in trouble.)
             //
             // Displace AUTO mid-move and the mv_* publish at the bottom of this loop stops
@@ -489,7 +489,7 @@ void Task_ControlLoop(void* pv) {
         // instead of coasting. For every other verb the acceleration ramp smooths the
         // transition as before.
         //
-        // JETSON_COMMS.md claimed preemption did "a quick brake first". It never did — there
+        // COMPANION_COMMS.md claimed preemption did "a quick brake first". It never did — there
         // is no null-momentum phase between the two commands, just a direct hand-over. Rather
         // than insert a brake (which would add an unbounded stall to every mission sequence,
         // and the companion sequences legs back-to-back deliberately), the doc is corrected to
@@ -715,7 +715,7 @@ void Task_ControlLoop(void* pv) {
             // ALREADY SURFACING. Decide the end state, or there isn't one: a failsafe forces
             // SURFACE without disarming, so a permanent link loss left the vehicle armed and
             // station-keeping at 0 m indefinitely — thrusters live, nobody watching, until
-            // the battery ran out. (JETSON_FEEDBACK.md §4.)
+            // the battery ran out. (COMPANION_FEEDBACK.md §4.)
             //
             // Once at the surface and settled, disarm. Gated on a real depth reading: with no
             // Bar30 the ascent is open-loop (DEPTH_LOST_ASCENT) and "am I at the surface?" is
