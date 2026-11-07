@@ -25,6 +25,20 @@
 #include "comms/mav_commands.h"
 #include "comms/mav_stream.h"   // queueStatusText: Core-1-safe disarm/failsafe notices
 
+// The translation demand actually handed to the mixer this tick, in the same
+// [-1, 1] units as MANUAL_CONTROL x/y, BEFORE FRAME_REVERSE (so it reads in the
+// companion's frame, not the actuator's). Zero while disarmed and during a motor
+// test or MOTOR_TUNE, matching what g_state.thrusters.norm publishes.
+//
+// Written by this task on Core 1 and read by Task_MAVLink on Core 0. A 32-bit
+// aligned float store is atomic on the ESP32, the same contract
+// depth::lastOutput() already relies on; a reader can see one tick's fwd with
+// the next tick's lat, which at 500 Hz is immaterial to a 10-50 Hz consumer.
+static volatile float s_dem_fwd = 0.0f;
+static volatile float s_dem_lat = 0.0f;
+float controlDemandFwd() { return s_dem_fwd; }
+float controlDemandLat() { return s_dem_lat; }
+
 // Local snapshot of everything the loop needs from shared state.
 struct LoopIn {
     bool       armed;
@@ -806,6 +820,7 @@ void Task_ControlLoop(void* pv) {
             mav_stream::queueStatusText(MAV_SEVERITY_INFO, "Motor test ended");
         }
 
+        float dem_fwd = 0.0f, dem_lat = 0.0f;   // stays 0 on the test / tune paths
         if (test_active) {
             for (int i = 0; i < NUM_THRUSTERS; ++i) dshot[i] = DSHOT_DISARMED;
             if (in.test_motor >= 0 && in.test_motor < NUM_THRUSTERS) {
@@ -882,6 +897,9 @@ void Task_ControlLoop(void* pv) {
                 feedforward::apply(roll, pitch, yaw, thr, in.gx, in.gy, in.gz, in.mode, learn);
             }
 
+            dem_fwd = armed ? fwd : 0.0f;   // before FRAME_REVERSE: the companion's frame
+            dem_lat = armed ? lat : 0.0f;
+
             // FRAME_REVERSE: negate every axis demand, right before mixing.
             //
             // Applied HERE, after the controllers and before the mixer, deliberately. The
@@ -897,6 +915,9 @@ void Task_ControlLoop(void* pv) {
             mixer::mix(roll, pitch, yaw, thr, fwd, lat, norm);
             mixer::toDshot(norm, in.dir, armed, dshot);
         }
+
+        s_dem_fwd = dem_fwd;
+        s_dem_lat = dem_lat;
 
         // --- Publish thruster demand + loop timestamp. ---
         {
