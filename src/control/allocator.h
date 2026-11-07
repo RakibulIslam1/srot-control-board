@@ -19,7 +19,7 @@
 //      sits 8.06 mm off the Z centreline, so surge carries a real pitch moment;
 //      under the old mixer that arrived as an unexplained pitch disturbance.
 //
-//  ⛔ WHAT THIS DELIBERATELY DOES NOT DO: tolerate a dead thruster. An earlier
+//  WARNING: WHAT THIS DELIBERATELY DOES NOT DO: tolerate a dead thruster. An earlier
 //  version carried `rebuild(avail)` and an `avail` mask on `allocate()`. Both are
 //  DELETED, because on this hull they cannot help and nothing could have called
 //  them:
@@ -35,13 +35,13 @@
 //  is asserted directly against the matrix in the test, which is a stronger claim
 //  than a function nobody called.
 //
-//  ⛔ UNACTUATED AXES ARE REFUSED, NOT ROUNDED TO ZERO. On mongla-5 every
+//  WARNING: UNACTUATED AXES ARE REFUSED, NOT ROUNDED TO ZERO. On mongla-5 every
 //  thruster's line of action passes through the long axis, so no combination
 //  produces roll. That is computed from the geometry, never declared. A roll
 //  demand comes back in `refused` so a caller cannot believe the vehicle is
 //  holding an attitude it physically cannot hold.
 //
-//  ⚠ THE UNITS ARE NOT NEWTONS AND THIS MODULE WILL NOT PRETEND OTHERWISE.
+//  Caution: THE UNITS ARE NOT NEWTONS AND THIS MODULE WILL NOT PRETEND OTHERWISE.
 //  Output is a signed fraction of ONE thruster's full output, -1..1 -- the same
 //  quantity `mixer::toDshot()` already consumes. Converting to force needs a
 //  thrust coefficient that has been measured for this thruster, and there is no
@@ -67,7 +67,7 @@
 //    RPI                    8.01 deg                  69.7 %            0
 //    QP (bounded LSQ)       8.01 deg                  69.7 %            0
 //
-//  ⛔ QP AND RPI ARE WORSE HERE, ON BOTH METRICS THAT MATTER TO A HULL. They
+//  WARNING: QP AND RPI ARE WORSE HERE, ON BOTH METRICS THAT MATTER TO A HULL. They
 //  minimise ||Bu - w||, and on an L2 score they do beat uniform scaling in 81 % of
 //  these cases -- which is exactly why L2 is the wrong objective. Being "closest"
 //  is allowed to rotate the wrench: 8 deg of mean direction error, 12.5 deg worst.
@@ -81,18 +81,18 @@
 //  all four methods return the identical u. QP only differs where the demand
 //  cannot be met, and there it differs for the worse.
 //
-//  ⚠ THIS CONCLUSION IS FRAME-SPECIFIC. The 8-thruster frame has a 2-dimensional
+//  Caution: THIS CONCLUSION IS FRAME-SPECIFIC. The 8-thruster frame has a 2-dimensional
 //  null space, and there a QP could genuinely trade thruster effort at no cost to
 //  the wrench. If that frame is ever flown, re-measure before assuming this row of
 //  the table transfers -- it will not.
 //
-//  ⭐ THE RESIDUAL IS NOT AN ALLOCATION PROBLEM. 39.9 % attitude error while
+//  Key point: THE RESIDUAL IS NOT AN ALLOCATION PROBLEM. 39.9 % attitude error while
 //  saturating is real, and no allocator can remove it: the thrust does not exist.
 //  The fix is to TELL THE CONTROLLERS, which is what upstream #20 asks for -- the
 //  difference between demanded and achieved is precisely the charge the PID
 //  integrators must not accumulate. `achieved()` is that number, ready for it.
 //
-//  ⚠ NO ARDUINO, NO PARAMS, NO GLOBALS IN THE MATH. This file compiles on a host
+//  Caution: NO ARDUINO, NO PARAMS, NO GLOBALS IN THE MATH. This file compiles on a host
 //  with nothing but <math.h>, which is what makes `test/test_allocator` possible.
 //  A 500 Hz allocator that can only be checked by flying it is not checkable.
 // =============================================================================
@@ -137,7 +137,7 @@ struct Result {
     float scale_translation;   // 1.0 = translation demand met in full
     int   limiting_thruster;   // index of the thruster that ran out first, or -1
     // Axes that carry a non-zero demand this frame but cannot be produced by the
-    // geometry at all. Bit i = Axis i. ⛔ Never silently zero -- report.
+    // geometry at all. Bit i = Axis i. WARNING: Never silently zero -- report.
     unsigned refused_mask;
 };
 
@@ -179,7 +179,7 @@ Result allocate(const float demand[AX_COUNT], int priority,
 // The wrench a set of outputs actually produces, in the same units `authority()`
 // reports.
 //
-// ⚠ NO FLIGHT CONSUMER, ON PURPOSE, AND THAT IS NOT AN ORPHAN. This is the
+// Caution: NO FLIGHT CONSUMER, ON PURPOSE, AND THAT IS NOT AN ORPHAN. This is the
 // correctness oracle the native test allocates against: you cannot check an
 // allocator without computing the wrench its outputs produce, and asserting
 // against recorded outputs instead would only prove the code still does what it

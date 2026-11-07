@@ -71,7 +71,7 @@ void selectFrame(int frame_class) {
         }
         mav_stream::queueStatusText(MAV_SEVERITY_INFO, b);
 
-        // ⚠ ONE MESSAGE, NOT THREE. queueStatusText holds QCAP = 4 slots and
+        // Caution: ONE MESSAGE, NOT THREE. queueStatusText holds QCAP = 4 slots and
         // nothing drains them until Task_MAVLink starts, so this runs with the
         // queue cold and params::init() may already have used one. Three lines
         // here could silently drop the third. The per-axis AUTHORITY -- the
@@ -80,7 +80,7 @@ void selectFrame(int frame_class) {
         // after boot ever sees it.
         return;
     }
-    // ⛔ FALL BACK LOUDLY. A geometry that will not solve is a configuration error, and
+    // WARNING: FALL BACK LOUDLY. A geometry that will not solve is a configuration error, and
     // the safe thing is the matrix that has flown -- but silently flying a different
     // allocation than the operator asked for is how a mixer for the wrong hull survives.
     s_frame_class = 0;

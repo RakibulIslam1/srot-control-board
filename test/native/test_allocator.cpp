@@ -1,7 +1,7 @@
 // =============================================================================
 //  test/native/test_allocator — the allocator, checked on a host.
 //
-//  ⛔ WHY THIS EXISTS. A 500 Hz allocator whose only test is a water test is not
+//  WARNING: WHY THIS EXISTS. A 500 Hz allocator whose only test is a water test is not
 //  tested; it is trusted. `allocator.cpp` deliberately includes nothing but
 //  <math.h> and <string.h> so it compiles here, and every number asserted below
 //  was derived independently (exact rational arithmetic on the CAD geometry)
@@ -66,7 +66,7 @@ static void test_geometry() {
     near(w[AX_YAW],   0.0f,      1e-7f, "axial    Mz");
 }
 
-// ⛔ ROLL. Unactuated must be COMPUTED, and a roll demand must be REFUSED.
+// WARNING: ROLL. Unactuated must be COMPUTED, and a roll demand must be REFUSED.
 static void test_roll_is_refused() {
     printf("\nROLL is unactuated, and that is computed from the table\n");
     check(begin(frames::CLASS_MONGLA5), "begin");
@@ -129,7 +129,7 @@ static void test_unit_demand_is_exactly_full() {
     }
 }
 
-// ⭐ THE COUPLING THE OLD MIXER COULD NOT EXPRESS. Pure surge on this hull needs
+// Key point: THE COUPLING THE OLD MIXER COULD NOT EXPRESS. Pure surge on this hull needs
 // the vertical pair to cancel the axial unit's pitch moment: 0.00806 / 0.519 =
 // 0.01553 of one thruster each, in opposite directions. Under the +-1 mixer that
 // moment was simply left on the vehicle.
@@ -173,7 +173,7 @@ static void test_priority_modes() {
     printf("        ^ both are correct. The pair cannot do both, and neither mode pretends it can.\n");
 }
 
-// ⛔ MECHANICAL INDEPENDENCE. PR #25 asked for the per-group behaviour to survive
+// WARNING: MECHANICAL INDEPENDENCE. PR #25 asked for the per-group behaviour to survive
 // whatever replaced the matrix. It does, and for a better reason than before: the
 // solution operator is block-diagonal because the GEOMETRY is, so a saturating
 // surge cannot reach the lateral pair. Checked by driving surge to the rail and
@@ -192,7 +192,7 @@ static void test_groups_stay_independent() {
            (double)o1[0], (double)o1[1], (double)o2[0], (double)o2[1]);
 }
 
-// ⛔ THIS HULL HAS NO REDUNDANCY, asserted against the GEOMETRY rather than
+// WARNING: THIS HULL HAS NO REDUNDANCY, asserted against the GEOMETRY rather than
 // against a fault-tolerance API.
 //
 // An earlier version proved this through `rebuild(avail)` and an `avail` mask on
@@ -259,19 +259,19 @@ static void test_no_redundancy_is_a_property_of_the_geometry() {
         if (r >= full5) every_loss_costs_an_axis = false;
     }
     check(every_loss_costs_an_axis,
-          "⛔ EVERY single-thruster loss costs a whole DOF -- zero redundancy");
+          "WARNING: EVERY single-thruster loss costs a whole DOF -- zero redundancy");
 
     check(begin(frames::CLASS_VECTORED8_GEOM), "begin(vectored8_geom)");
     const int full8 = rank_without(-1, 8);
     check(full8 == 6, "eight thrusters -> full 6-DOF rank");
     bool survives_any_loss = true;
     for (int j = 0; j < 8; ++j) if (rank_without(j, 8) < full8) survives_any_loss = false;
-    check(survives_any_loss, "⭐ and it keeps all six axes after ANY single loss");
+    check(survives_any_loss, "Key point: and it keeps all six axes after ANY single loss");
     printf("        ^ THAT is what redundancy buys. mongla-5 has none of it, so a\n"
            "          thruster failure is a surface-now event, not a degrade-and-continue one.\n");
 }
 
-// ⭐ NO DEMANDED AXIS IS EVER DRIVEN BACKWARDS. The invariant that makes both
+// Key point: NO DEMANDED AXIS IS EVER DRIVEN BACKWARDS. The invariant that makes both
 // priority modes safe to ship, and it is provable rather than lucky:
 //
 //   uniform   u = A*w / max(1, max|A*w|)  -> achieved = w * s, s in (0,1].
@@ -283,7 +283,7 @@ static void test_no_redundancy_is_a_property_of_the_geometry() {
 //             NON-NEGATIVE scalar. A non-negative multiple of a vector cannot
 //             oppose it, so translation is degraded but never reversed.
 //
-// ⚠ THIS TEST EXISTS BECAUSE THE FIRST MEASUREMENT OF IT WAS WRONG. A sweep that
+// Caution: THIS TEST EXISTS BECAUSE THE FIRST MEASUREMENT OF IT WAS WRONG. A sweep that
 // compared sign(achieved) against sign(demand) reported reversals on 41.9 % of
 // saturating demands -- and every one was a floating-point +0.0 scored against a
 // negative demand. sign(+0.0) is 0.0, but the value that actually came out was
@@ -319,7 +319,7 @@ static void test_no_axis_is_ever_driven_backwards() {
                 ++reversals;
                 const float ratio = fabsf(wr[i]) / fabsf(want);
                 if (ratio > worst_ratio) worst_ratio = ratio;
-                printf("        ⛔ %s: want %+.4f got %+.4f (prio %d)\n",
+                printf("        WARNING: %s: want %+.4f got %+.4f (prio %d)\n",
                        AXIS_NAME[i], (double)want, (double)wr[i], prio);
             }
         }
@@ -381,7 +381,7 @@ static void test_vectored8_geom_builds() {
     printf("        authority: sway %.3f surge %.3f heave %.3f pitch %.3f roll %.3f yaw %.3f\n",
            (double)authority(AX_SWAY), (double)authority(AX_SURGE), (double)authority(AX_HEAVE),
            (double)authority(AX_PITCH), (double)authority(AX_ROLL), (double)authority(AX_YAW));
-    printf("        ⛔ PLACEHOLDER ARMS. Measure them before flying this frame.\n");
+    printf("        WARNING: PLACEHOLDER ARMS. Measure them before flying this frame.\n");
     // Minimum-norm property: the redundant frame must produce the wrench EXACTLY.
     float d[AX_COUNT] = {0}, out[ALLOC_MAX_THRUSTERS], wr[AX_COUNT];
     d[AX_YAW] = 0.5f; d[AX_SURGE] = 0.5f;

@@ -9,14 +9,14 @@
 //  and its inverse, at boot, so a hull change is a table edit rather than a
 //  hand-derived matrix.
 //
-//  ⛔ WHY THIS FILE IS SEPARATE FROM allocator.cpp. Data and algorithm have
+//  WARNING: WHY THIS FILE IS SEPARATE FROM allocator.cpp. Data and algorithm have
 //  different review rules. A number in here is checked against a CAD model or a
 //  tape measure; a line in there is checked against linear algebra. Mixing them
 //  is how `mixer.cpp` ended up with a hard-coded matrix that nobody could tell
 //  was for a different vehicle -- the matrix WAS the geometry, so there was
 //  nothing to compare it against.
 //
-//  ⚠ BODY FRAME, and it is the CAD's, stated once here so nothing downstream
+//  Caution: BODY FRAME, and it is the CAD's, stated once here so nothing downstream
 //  has to guess:
 //        +X  starboard   (the lateral tunnels' bore)
 //        +Y  forward      (the long, 702 mm axis; the axial unit lies on it)
@@ -26,7 +26,7 @@
 //  This is a right-handed frame with +Z up, so a POSITIVE heave force ascends,
 //  which is the same convention `depth_control` works in.
 //
-//  ⛔⛔ THE VERTICAL SIGN CONVENTION IS NOT THE LEGACY MIXER'S, AND THIS IS THE
+//  WARNING: WARNING: THE VERTICAL SIGN CONVENTION IS NOT THE LEGACY MIXER'S, AND THIS IS THE
 //  ONE THING THAT CAN SINK THE VEHICLE ON THE FIRST DIVE WITH FRAME_CLASS != 0.
 //
 //  `mixer.cpp`'s literal matrix gives every vertical motor a throttle column of
@@ -41,14 +41,14 @@
 //  a depth loop wired the wrong way round is POSITIVE FEEDBACK: measured deeper
 //  than target -> command descend -> deeper. It does not oscillate, it dives.
 //
-//  ⛔ BEFORE ANY ARMED DIVE ON FRAME_CLASS != 0: set MOT_n_DIRECTION for the
+//  WARNING: BEFORE ANY ARMED DIVE ON FRAME_CLASS != 0: set MOT_n_DIRECTION for the
 //  vertical pair so that a positive command ascends, and CONFIRM it with the
 //  Motor Test tab and a hand on the hull -- not by reasoning about this comment.
 //  `depth::preview()` exists precisely so the sign can be read off telemetry
 //  while disarmed; use it. The reason this is a comment and not code is that only
 //  the vehicle knows which way its props are on.
 //
-//  ⚠ THE SIGNS OF THE AXES ARE A DECISION, NOT A MEASUREMENT. Which end of Y is
+//  Caution: THE SIGNS OF THE AXES ARE A DECISION, NOT A MEASUREMENT. Which end of Y is
 //  the bow, and whether the axial unit is a tractor or a pusher, are settled
 //  against the vehicle -- in water, one thruster at a time -- not from a part
 //  list. Everything a sign error does here is invisible on a bench and violent
@@ -103,7 +103,7 @@ struct Frame {
 // Separations are therefore 350.00 mm and 519.00 mm EXACTLY, which is what the
 // vehicle documentation has said all along.
 //
-// ⚠ THE AXIAL UNIT IS 8.06 mm OFF THE Z CENTRELINE, and that is not noise -- it
+// Caution: THE AXIAL UNIT IS 8.06 mm OFF THE Z CENTRELINE, and that is not noise -- it
 // is a real pitch moment of 0.00806 N.m per newton of surge. The +-1 mixer could
 // not express it at all, so surge used to arrive as an uncorrected pitch-up
 // disturbance for the attitude loop (and then for the CoB auto-trim) to absorb.
@@ -121,14 +121,14 @@ static const Thruster MONGLA5_T[5] = {
 // ── FRAME 2: VECTORED-8, as GEOMETRY ─────────────────────────────────────────
 //
 // The competition vehicle: four horizontal T200s at 45 degrees and four vertical.
-// ⚠ THIS IS NOT THE FRAME THE VEHICLE FLIES ON TODAY. Today's path is the
+// Caution: THIS IS NOT THE FRAME THE VEHICLE FLIES ON TODAY. Today's path is the
 // literal +-1 matrix in `mixer.cpp`, preserved bit-identically as FRAME_CLASS 0,
 // and it stays the default. This entry exists so the same vehicle can be flown
 // through the geometric allocator and the two compared on a bench, because a
 // +-1 matrix and a geometric one are NOT the same map: the +-1 form overstates
 // surge and sway by 1/cos(45 deg) = 41 % and carries no moment arms at all.
 //
-// ⛔ THE ARM LENGTHS BELOW ARE PLACEHOLDERS AND MUST BE MEASURED BEFORE USE.
+// WARNING: THE ARM LENGTHS BELOW ARE PLACEHOLDERS AND MUST BE MEASURED BEFORE USE.
 // 0.220 / 0.120 / 0.150 m is a plausible BlueROV2-Heavy-like layout, not this
 // vehicle. `allocator::begin()` refuses this frame unless FRAME_ARMS_OK is set,
 // precisely so a guess cannot fly by default. Replace them with tape-measure
