@@ -113,7 +113,7 @@ void mix(float roll, float pitch, float yaw,
         float u[ALLOC_MAX_THRUSTERS];
         const int prio = (g_params.alloc_prio >= 0.5f) ? allocator::PRIO_ATTITUDE
                                                        : allocator::PRIO_UNIFORM;
-        allocator::allocate(d, nullptr, prio, u);
+        allocator::allocate(d, prio, u);
         for (int m = 0; m < NUM_THRUSTERS; ++m)
             out[m] = (m < allocator::thrusterCount()) ? u[m] : 0.0f;
         return;
