@@ -1,0 +1,37 @@
+src/control/mixer.cpp
+  s_b4c45e3235679b::t_4ab2fe33e68bda 83
+  s_b4c45e3235679b::t_446d90188ddb94 74
+src/comms/params.h
+  s_b4c45e3235679b::t_9ed812a7ffe3ef 74
+tools/run_native_tests.sh
+  s_b4c45e3235679b::t_9a8f4bc6f89965 4
+src/control/frames.h
+  s_b4c45e3235679b::t_8761c55ce5a8e3 12,19,29,44,51,106,124,131
+src/control/allocator.cpp
+  s_b4c45e3235679b::t_077d0bab28e90d 22,105,195,257
+src/control/allocator.h
+  s_b4c45e3235679b::t_5643215eba0ed6 22,38,44,70,84,89,95,140
+  s_b4c45e3235679b::t_78dcfe7e885e9a 182
+src/comms/mav_stream.cpp
+  s_b4c45e3235679b::t_e1aca96ef58e9b 741,757
+test/native/test_allocator.cpp
+  s_b4c45e3235679b::t_0638ab20d79634 4,69,132,176,195,262,269,274,286,322,384
+include/config.h
+  s_b4c45e3235679b::t_974e5c18504904 252,280,306,785
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "7054b2f123a515a039ceca95314daebf3629c3b5",
+  "prompts": {},
+  "sessions": {
+    "s_b4c45e3235679b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "270a44e7-9516-4e8d-8a99-81d5e8508c78",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "fh1m <fahim.2002.faisal@gmail.com>"
+    }
+  }
+}
