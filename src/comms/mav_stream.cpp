@@ -738,7 +738,7 @@ static void configBanner(uint32_t now) {
         // MUST fit 50 chars -- STATUSTEXT.text is char[50]. The rev-9 wording
         // ("CFG rev10 FRAME_REVERSE=1 MOT_DIR=-1,1,1,1,1,1,1,-1") was 51 and lost its final
         // digit on the wire, which is worse than a shorter label: a truncated -1 reads as -.
-        // ⭐ FC = the allocation actually IN FORCE, from mixer::activeFrameClass(),
+        // Key point: FC = the allocation actually IN FORCE, from mixer::activeFrameClass(),
         // NOT the FRAME_CLASS param. selectFrame() falls back to 0 when a geometry
         // will not solve, so the param says what was ASKED for and this says what
         // the vehicle is doing. A host reading the param would believe the wrong
@@ -754,7 +754,7 @@ static void configBanner(uint32_t now) {
                  (int)lroundf(g_params.mot_dir[6]) * d[6], (int)lroundf(g_params.mot_dir[7]) * d[7]);
         queueStatusText(MAV_SEVERITY_INFO, buf);
 
-        // ⭐ PER-AXIS AUTHORITY, on a geometric frame only.
+        // Key point: PER-AXIS AUTHORITY, on a geometric frame only.
         //
         // A +-1 mixer calls every axis "1.0". On the mongla-5 hull the axes differ
         // by 5.71x -- sway 2.000 against yaw 0.350, which is exactly the reduced

@@ -19,7 +19,7 @@
 //   allocate()   u = Ainv * (demand .* auth), split into an attitude part and a
 //                translation part, then scaled to fit. No matrix work.
 //
-//  ⛔ THE ONE THING TO GET RIGHT: every loop here is bounded by a compile-time
+//  WARNING: THE ONE THING TO GET RIGHT: every loop here is bounded by a compile-time
 //  constant and there is no dynamic allocation, no recursion, and no iteration
 //  whose count depends on the data. begin() is off the flight loop; allocate() is
 //  on it, and it is straight-line code.
@@ -102,7 +102,7 @@ static void cross3(const float a[3], const float b[3], float out[3]) {
 
 // Solve the geometry: s_B -> s_A and s_auth. Called once, from begin().
 //
-// ⚠ NOT CALLABLE FROM THE FLIGHT LOOP. It solves a linear system.
+// Caution: NOT CALLABLE FROM THE FLIGHT LOOP. It solves a linear system.
 static bool build() {
     memset(s_A, 0, sizeof(s_A));
     for (int k = 0; k < AX_COUNT; ++k) s_auth[k] = 0.0f;
@@ -192,7 +192,7 @@ bool begin(int cls) {
     for (int j = 0; j < s_n; ++j) {
         const float* a = f->t[j].axis;
         const float  n = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-        // ⛔ A non-unit axis is a table error, not something to normalise away
+        // WARNING: A non-unit axis is a table error, not something to normalise away
         // quietly: it usually means somebody wrote a force vector where a
         // direction belongs, and the magnitude they intended is then lost.
         if (!(n > 0.9f) || !(n < 1.1f)) return false;
@@ -254,7 +254,7 @@ Result allocate(const float demand[AX_COUNT], int priority,
     for (int j = 0; j < ALLOC_MAX_THRUSTERS; ++j) out[j] = 0.0f;
     if (!s_ready) return r;
 
-    // ⛔ REFUSE, DO NOT ROUND. An unactuated axis with a live demand on it is a
+    // WARNING: REFUSE, DO NOT ROUND. An unactuated axis with a live demand on it is a
     // caller believing something false about the vehicle, and the only useful
     // response is to say so. A non-finite demand is refused the same way rather
     // than propagated: one NaN here would reach every thruster.

@@ -71,7 +71,7 @@ struct Params {
     //   0 = the legacy +-1 vectored-8 matrix compiled into mixer.cpp (DEFAULT, unchanged)
     //   1 = mongla-5, allocated from measured geometry
     //   2 = vectored-8 from geometry (placeholder arms — measure before use)
-    // ⛔ Default 0 on purpose: adopting the geometric allocator must never be the reason
+    // WARNING: Default 0 on purpose: adopting the geometric allocator must never be the reason
     // a vehicle that flies today stops flying. A class whose geometry will not solve is
     // refused at boot and the vehicle falls back to 0 with a STATUSTEXT saying so.
     float frame_class;

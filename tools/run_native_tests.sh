@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compile and run the host-side firmware tests.
 #
-# ⛔ WHY NOT PlatformIO's test runner. These tests exist so a control algorithm
+# WARNING: WHY NOT PlatformIO's test runner. These tests exist so a control algorithm
 # can be checked WITHOUT a board, a toolchain download, or a water test. Adding a
 # platform dependency to reach them would defeat that. Anything under
 # test/native/ must compile with a plain C++ compiler against src/ alone.
