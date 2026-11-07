@@ -67,6 +67,20 @@ struct Params {
     float btn_func[16];
     // Focused ArduSub-compatible params.
     float frame_config;     // FRAME_CONFIG (2 = vectored, informational)
+    // FRAME_CLASS — which THRUST ALLOCATION the vehicle flies on. See control/frames.h.
+    //   0 = the legacy +-1 vectored-8 matrix compiled into mixer.cpp (DEFAULT, unchanged)
+    //   1 = mongla-5, allocated from measured geometry
+    //   2 = vectored-8 from geometry (placeholder arms — measure before use)
+    // WARNING: Default 0 on purpose: adopting the geometric allocator must never be the reason
+    // a vehicle that flies today stops flying. A class whose geometry will not solve is
+    // refused at boot and the vehicle falls back to 0 with a STATUSTEXT saying so.
+    float frame_class;
+    // ALLOC_PRIO — how a saturating demand is given up (FRAME_CLASS != 0 only).
+    //   0 = UNIFORM  scale the whole demand down, preserving every axis ratio (DEFAULT —
+    //                this is what mixer::mix() does today, so handling is unchanged)
+    //   1 = ATTITUDE meet roll/pitch/yaw in full, translation takes what is left
+    // Both are correct and they handle differently; see control/allocator.h.
+    float alloc_prio;
     // FRAME_REVERSE (0/1) — negate all six axis demands before the mixer. The right knob for
     // "every axis is backwards"; MOT_n_DIRECTION is for individual mis-wired thrusters and
     // using it for a whole-frame flip breaks the mixer's torque patterns. See config.h.

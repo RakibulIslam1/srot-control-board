@@ -14,6 +14,16 @@
 
 namespace mixer {
 
+// Select the allocation for FRAME_CLASS and report what happened, once, at boot.
+// Class 0 keeps the literal matrix below; any other class hands mix() to
+// control/allocator, and a class whose geometry will not solve falls back to 0.
+// Safe to call again after a FRAME_CLASS write.
+void selectFrame(int frame_class);
+
+// Which allocation mix() is currently using: 0 = the legacy matrix here, else the
+// frames::Class the allocator built. Read by the telemetry and by MOTOR_DETECT.
+int activeFrameClass();
+
 // Allocate demands → per-motor normalized outputs (−1..1). If any output
 // exceeds ±1 the whole set is scaled down so the mix (relative authority) is
 // preserved rather than clipped per-motor.

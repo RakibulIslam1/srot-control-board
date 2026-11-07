@@ -249,7 +249,7 @@
 // Driven by Task_UI_Status (Core 0) from AuxState. Controllable from QGC via
 // MAV_CMD_DO_SET_SERVO (servo) and MAV_CMD_DO_SET_RELAY (switch).
 //
-// ⚠ ROLES ARE PER-CHANNEL PARAMS, NOT A COMPILE-TIME MAP. Set SERVOn_ROLE (Bondor
+// Caution: ROLES ARE PER-CHANNEL PARAMS, NOT A COMPILE-TIME MAP. Set SERVOn_ROLE (Bondor
 // or PARAM_SET); the default is (channel < 8) ? SERVO : SWITCH, applied in
 // params.cpp buildTable(). PCA_CH_ROLE_INIT below has NO consumer -- see the note
 // on it. An earlier version of this comment said "edit PCA_CH_ROLE to match how
@@ -277,7 +277,7 @@
 #define PCA_LIGHTS2_CH          7    // servo-role channel for lights 2
 #define PCA_PAYLOAD_SERVO_CH    0    // servo-role channel for payload-release servo
 
-// ⚠ DEAD -- no consumer anywhere in src/ or include/. The real defaults come from
+// Caution: DEAD -- no consumer anywhere in src/ or include/. The real defaults come from
 // the param table row `(c < 8) ? 1.0f : 2.0f` in params.cpp buildTable(). Kept only
 // because it documents the intended shipping layout; do NOT edit it expecting an
 // effect, and do not treat it as a description of the harness.
@@ -303,7 +303,7 @@
 // re-roles a channel -- and the failure mode of a stale payload map is firing the
 // manipulator arm during a drop. Stored here, the identity travels with the hull.
 //
-// ⚠ APPEND-ONLY, for the same reason movement::Type is: these numbers are mirrored
+// Caution: APPEND-ONLY, for the same reason movement::Type is: these numbers are mirrored
 // by hand in duburi_ws (fc/srot_protocol.py) and Bondor (src/shared/protocol.ts).
 // Inserting a value silently renames every payload after it. 0 must stay NONE so an
 // unconfigured board (param default 0.0f) reads "unassigned" rather than a device.
@@ -527,6 +527,13 @@
 // mixer pattern -- and therefore every torque -- intact. MOT_n_DIRECTION then keeps its real
 // job, which is compensating individual thrusters that are physically wired backwards.
 #define DEF_FRAME_REVERSE       0.0f
+
+// FRAME_CLASS / ALLOC_PRIO — geometric thrust allocation (control/allocator).
+// 0 keeps the compiled +-1 vectored-8 matrix in mixer.cpp, bit for bit. That is the
+// default because it is what has flown; 1 is the mongla-5 hull, whose geometry is
+// measured and whose roll axis is unactuated. See src/control/frames.h.
+#define DEF_FRAME_CLASS         0.0f
+#define DEF_ALLOC_PRIO          0.0f
 
 #define DEF_MAG_FIELD_MIN       8.0f        // uT — below this the sensor is dead/shielded
 #define DEF_MAG_FIELD_MAX       120.0f      // uT — above this something local dominates
@@ -775,7 +782,7 @@
 // roll and pitch read correctly. Measured in water 2026-08-07: turning right made yaw
 // DECREASE; MANUAL was fine (open loop) and STABILIZE/DEPTH_HOLD span the hull.
 //
-// ⚠ ANY HEADING RECORDED AGAINST REV <= 9 HAS THE OPPOSITE SENSE, including absolute
+// Caution: ANY HEADING RECORDED AGAINST REV <= 9 HAS THE OPPOSITE SENSE, including absolute
 // MOVE_TURN targets. Re-run the mag alignment after flashing.
 //
 // Also: MOTOR_DETECT decides on the projection of the gyro onto the expected angular

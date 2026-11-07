@@ -5,7 +5,9 @@
 #include "comms/mav_stream.h"
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
-#include "comms/params.h"            // g_params.leak_en — the LEAK health bit's "enabled" state
+#include "comms/params.h"
+#include "control/mixer.h"       // activeFrameClass -- which allocation is LIVE
+#include "control/allocator.h"   // authority() -- what each axis is actually worth            // g_params.leak_en — the LEAK health bit's "enabled" state
 #include "control/depth_control.h"   // preview()/lastError() — depth-loop observability
 #include "control/mixer.h"           // mix() is pure — preview the depth chain disarmed
 #include "control/yaw_ref.h"         // state() — is the heading absolute or boot-relative?
@@ -736,15 +738,45 @@ static void configBanner(uint32_t now) {
         // MUST fit 50 chars -- STATUSTEXT.text is char[50]. The rev-9 wording
         // ("CFG rev10 FRAME_REVERSE=1 MOT_DIR=-1,1,1,1,1,1,1,-1") was 51 and lost its final
         // digit on the wire, which is worse than a shorter label: a truncated -1 reads as -.
+        // Key point: FC = the allocation actually IN FORCE, from mixer::activeFrameClass(),
+        // NOT the FRAME_CLASS param. selectFrame() falls back to 0 when a geometry
+        // will not solve, so the param says what was ASKED for and this says what
+        // the vehicle is doing. A host reading the param would believe the wrong
+        // allocation -- which is the same class of near-miss this banner exists for.
         snprintf(buf, sizeof(buf),
-                 "CFG r%d FR=%d DIR=%d,%d,%d,%d,%d,%d,%d,%d",
+                 "CFG r%d FR=%d FC=%d DIR=%d,%d,%d,%d,%d,%d,%d,%d",
                  SROT_FW_BEHAVIOUR_REV,
                  g_params.frame_reverse > 0.5f ? 1 : 0,
+                 mixer::activeFrameClass(),
                  (int)lroundf(g_params.mot_dir[0]) * d[0], (int)lroundf(g_params.mot_dir[1]) * d[1],
                  (int)lroundf(g_params.mot_dir[2]) * d[2], (int)lroundf(g_params.mot_dir[3]) * d[3],
                  (int)lroundf(g_params.mot_dir[4]) * d[4], (int)lroundf(g_params.mot_dir[5]) * d[5],
                  (int)lroundf(g_params.mot_dir[6]) * d[6], (int)lroundf(g_params.mot_dir[7]) * d[7]);
         queueStatusText(MAV_SEVERITY_INFO, buf);
+
+        // Key point: PER-AXIS AUTHORITY, on a geometric frame only.
+        //
+        // A +-1 mixer calls every axis "1.0". On the mongla-5 hull the axes differ
+        // by 5.71x -- sway 2.000 against yaw 0.350, which is exactly the reduced
+        // matrix's condition number -- so the per-axis PID gains must differ by the
+        // same factor. Until this line existed nothing anywhere could read those
+        // numbers: an operator tuning yaw against sway's scale was fighting a 5.7x
+        // error with no way to see it. Same argument as FR and DIR above --
+        // configuration is behaviour, and this is the configuration that decides
+        // what a demand of 1.0 MEANS.
+        //
+        // A ROLL authority of 0.000 is the unactuated axis saying so on the wire.
+        if (mixer::activeFrameClass() != 0) {
+            snprintf(buf, sizeof(buf),
+                     "AUTH sw%.2f su%.2f hv%.2f pi%.2f rl%.2f yw%.2f",
+                     (double)allocator::authority(allocator::AX_SWAY),
+                     (double)allocator::authority(allocator::AX_SURGE),
+                     (double)allocator::authority(allocator::AX_HEAVE),
+                     (double)allocator::authority(allocator::AX_PITCH),
+                     (double)allocator::authority(allocator::AX_ROLL),
+                     (double)allocator::authority(allocator::AX_YAW));
+            queueStatusText(MAV_SEVERITY_INFO, buf);
+        }
     }
 
     // A bench affordance that became permanent is the failure this catches: with COMPID = 0

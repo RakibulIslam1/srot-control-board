@@ -5,6 +5,9 @@
 #include "control/mixer.h"
 #include "comms/params.h"
 #include "control/thrust_trim.h"   // slow RPM-based thrust normalisation gain
+#include "control/allocator.h"     // geometric allocation (FRAME_CLASS != 0)
+#include "comms/mav_stream.h"      // queueStatusText: say which frame was selected
+#include "comms/mavlink_bridge.h"  // MAV_SEVERITY_*
 
 namespace mixer {
 
@@ -40,9 +43,81 @@ static const float M[NUM_THRUSTERS][6] = {
 // The two groups share no axis and no thruster, so they saturate independently.
 static const int N_HORIZ = 4;   // motors 0..3; the rest are the vertical group
 
+// Which allocation is live. Latched by selectFrame() at boot (and on a FRAME_CLASS
+// write) rather than read from g_params every cycle: the allocator has to have been
+// BUILT for the class, and a param that changed between the build and the mix would
+// route demands through a matrix for a different hull for one cycle.
+static int s_frame_class = 0;
+
+void selectFrame(int frame_class) {
+    if (frame_class == frames::CLASS_LEGACY_VECTORED8) {
+        s_frame_class = 0;
+        mav_stream::queueStatusText(MAV_SEVERITY_INFO, "Frame: legacy vectored-8 matrix");
+        return;
+    }
+    if (allocator::begin(frame_class)) {
+        s_frame_class = frame_class;
+        // Name the unactuated axes here, at boot, where an operator can still act on it.
+        // A hull that cannot roll must not be discovered by a roll command failing in water.
+        char b[64];
+        const unsigned un = allocator::unactuatedMask();
+        if (un) {
+            int first = -1;
+            for (int i = 0; i < allocator::AX_COUNT; ++i) if (un & (1u << i)) { first = i; break; }
+            snprintf(b, sizeof(b), "Frame: %s, %s UNACTUATED",
+                     allocator::frameName(), allocator::AXIS_NAME[first]);
+        } else {
+            snprintf(b, sizeof(b), "Frame: %s, 6 DOF", allocator::frameName());
+        }
+        mav_stream::queueStatusText(MAV_SEVERITY_INFO, b);
+
+        // Caution: ONE MESSAGE, NOT THREE. queueStatusText holds QCAP = 4 slots and
+        // nothing drains them until Task_MAVLink starts, so this runs with the
+        // queue cold and params::init() may already have used one. Three lines
+        // here could silently drop the third. The per-axis AUTHORITY -- the
+        // number this allocation turns on -- goes out from mav_stream's repeated
+        // configBanner() instead, which is also the only way a GCS that connects
+        // after boot ever sees it.
+        return;
+    }
+    // WARNING: FALL BACK LOUDLY. A geometry that will not solve is a configuration error, and
+    // the safe thing is the matrix that has flown -- but silently flying a different
+    // allocation than the operator asked for is how a mixer for the wrong hull survives.
+    s_frame_class = 0;
+    char b[64];
+    snprintf(b, sizeof(b), "FRAME_CLASS %d REFUSED - using legacy matrix", frame_class);
+    mav_stream::queueStatusText(MAV_SEVERITY_ERROR, b);
+}
+
+// The allocation actually in force. Distinct from the FRAME_CLASS *param*, which
+// is what was ASKED for -- selectFrame() falls back to 0 on a geometry that will
+// not solve, and a host that reads the param instead of this would believe the
+// wrong allocation. mav_stream's CFG line reports this one.
+int activeFrameClass() { return s_frame_class; }
+
 void mix(float roll, float pitch, float yaw,
          float throttle, float forward, float lateral,
          float out[NUM_THRUSTERS]) {
+    if (s_frame_class != 0) {
+        // Geometric allocation. The six demands arrive in the same -1..1 form and the
+        // same order the legacy path uses; the allocator's own axis order is different
+        // (it is grouped force-then-moment, which is what a wrench is), so the mapping
+        // is written out rather than relying on the two enums happening to agree.
+        float d[allocator::AX_COUNT];
+        d[allocator::AX_SWAY]  = lateral;
+        d[allocator::AX_SURGE] = forward;
+        d[allocator::AX_HEAVE] = throttle;
+        d[allocator::AX_PITCH] = pitch;
+        d[allocator::AX_ROLL]  = roll;
+        d[allocator::AX_YAW]   = yaw;
+        float u[ALLOC_MAX_THRUSTERS];
+        const int prio = (g_params.alloc_prio >= 0.5f) ? allocator::PRIO_ATTITUDE
+                                                       : allocator::PRIO_UNIFORM;
+        allocator::allocate(d, prio, u);
+        for (int m = 0; m < NUM_THRUSTERS; ++m)
+            out[m] = (m < allocator::thrusterCount()) ? u[m] : 0.0f;
+        return;
+    }
     const float demand[6] = { roll, pitch, yaw, throttle, forward, lateral };
     float maxabs[2] = { 1.0f, 1.0f };
     for (int m = 0; m < NUM_THRUSTERS; ++m) {
@@ -141,6 +216,18 @@ int16_t oneToDshot(float norm, int8_t dir) {
 
 void motorAngular(int m, float& roll, float& pitch, float& yaw) {
     if (m < 0 || m >= NUM_THRUSTERS) { roll = pitch = yaw = 0; return; }
+    if (s_frame_class != 0) {
+        // Read the expected angular response off the GEOMETRY, not off a literal
+        // column. On a frame whose moment arms differ by 5.7x this also gives
+        // MOTOR_DETECT a correctly-WEIGHTED direction to project onto, instead of
+        // three equal +-1s that made |roll| == |pitch| for every vertical thruster.
+        float w[allocator::AX_COUNT];
+        allocator::thrusterWrench(m, w);
+        roll  = w[allocator::AX_ROLL];
+        pitch = w[allocator::AX_PITCH];
+        yaw   = w[allocator::AX_YAW];
+        return;
+    }
     roll = M[m][0]; pitch = M[m][1]; yaw = M[m][2];
 }
 
