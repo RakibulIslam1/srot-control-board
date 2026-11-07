@@ -2,6 +2,7 @@
 //  comms/mav_stream — implementation
 // =============================================================================
 
+#include "tasks/tasks.h"
 #include "comms/mav_stream.h"
 #include "comms/mavlink_bridge.h"
 #include "comms/mav_commands.h"
@@ -833,6 +834,13 @@ void update(uint32_t now) {
         // simply ages it out; a fabricated -160 it cannot distinguish from a measurement.
         if (s.depth_ok) sendNamed(now, "WTEMP", s.wtemp);
         sendNamed(now, "STUNT_PRG", s.stunt_prog);
+        // The translation demand the mixer was handed, in every mode. The companion
+        // knows the demand of a MANUAL_CONTROL frame it sent, but in AUTO the board
+        // ramps its own (task_control_loop.cpp `fwd = md.fwd; lat = md.lat;`) and
+        // reported none -- so every model that learns hull speed from demand went
+        // silent for exactly the verbs a mission uses most.
+        sendNamed(now, "DEM_FWD", controlDemandFwd());
+        sendNamed(now, "DEM_LAT", controlDemandLat());
         sendNamed(now, "ATUNE", s.atune ? 1.0f : 0.0f);
         // Limit-cycle measurement, live, so an autotune run can be WATCHED instead of only
         // explained after it aborts. AT_TU and AT_OKPCT read 0 during collection and settle
@@ -977,6 +985,9 @@ void update(uint32_t now) {
         sendNamed(now, "STK_LORA", (float)g_stack_hw[4]);
         sendNamed(now, "STK_DSH",  (float)g_stack_hw[5]);
         sendNamed(now, "HEAP", (float)ESP.getFreeHeap());
+        // The low-water mark, beside the stacks' own: a leak that allocates and frees
+        // between two 2 s reads of HEAP never shows in a current value.
+        sendNamed(now, "HEAP_MIN", (float)ESP.getMinFreeHeap());
     }
 }
 
