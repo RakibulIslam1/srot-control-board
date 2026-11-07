@@ -20,3 +20,9 @@ void Task_Buzzer(void* pv);       // Core 0 — buzzer melodies/alerts @ 200 Hz
 void Task_SensorRead(void* pv);   // Core 1 — BNO085 + Bar30 sampling
 void Task_ControlLoop(void* pv);  // Core 1 — PID cascade, mixer, stunt/cal SM
 void Task_DShot_RMT(void* pv);    // Core 1 — 8-channel DShot150 output
+
+// The fwd/lat demand the control loop handed to the mixer on its last tick, in
+// MANUAL_CONTROL units, before FRAME_REVERSE; 0 while disarmed. Streamed as
+// DEM_FWD / DEM_LAT so the companion knows the demand during an AUTO move too.
+float controlDemandFwd();
+float controlDemandLat();
