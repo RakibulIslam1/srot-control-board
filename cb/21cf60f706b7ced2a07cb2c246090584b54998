@@ -1,0 +1,23 @@
+src/comms/mav_stream.cpp
+  s_b4c45e3235679b::t_603bc28fbedccd 5,837-843,988-990
+src/tasks/task_control_loop.cpp
+  s_b4c45e3235679b::t_812b85b892cee9 28-41,823,900-902,919-921
+src/tasks/tasks.h
+  s_b4c45e3235679b::t_f2735bc2a066a5 23-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "cb21cf60f706b7ced2a07cb2c246090584b54998",
+  "prompts": {},
+  "sessions": {
+    "s_b4c45e3235679b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "270a44e7-9516-4e8d-8a99-81d5e8508c78",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "fh1m <fahim.2002.faisal@gmail.com>"
+    }
+  }
+}
