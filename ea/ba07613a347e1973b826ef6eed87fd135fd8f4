@@ -1,0 +1,33 @@
+src/comms/mav_stream.cpp
+  s_b4c45e3235679b::t_e1aca96ef58e9b 741,757
+src/comms/params.h
+  s_b4c45e3235679b::t_9ed812a7ffe3ef 74
+src/control/allocator.cpp
+  s_b4c45e3235679b::t_077d0bab28e90d 22,195,257
+src/control/allocator.h
+  s_b4c45e3235679b::t_5643215eba0ed6 22,38,70,89,140
+src/control/frames.h
+  s_b4c45e3235679b::t_8761c55ce5a8e3 12,29,44,131
+src/control/mixer.cpp
+  s_b4c45e3235679b::t_4ab2fe33e68bda 83
+test/native/test_allocator.cpp
+  s_b4c45e3235679b::t_0638ab20d79634 4,69,132,176,195,262,269,274,322,384
+tools/run_native_tests.sh
+  s_b4c45e3235679b::t_9a8f4bc6f89965 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "eaba07613a347e1973b826ef6eed87fd135fd8f4",
+  "prompts": {},
+  "sessions": {
+    "s_b4c45e3235679b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "270a44e7-9516-4e8d-8a99-81d5e8508c78",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "fh1m <fahim.2002.faisal@gmail.com>"
+    }
+  }
+}
