@@ -15,11 +15,11 @@
   #include "comms/ui_log.h"
   #include "comms/params.h"          // g_params.rpm_* for the config push
   #include "control/thrust_trim.h"   // slow RPM-based thrust normalisation
-  #include "comms/mav_stream.h"      // queueStatusText — stall reports
-  #include "comms/mavlink_bridge.h"  // MAV_SEVERITY_*
 #else
   #include "drivers/dshot_out.h"
 #endif
+#include "comms/mav_stream.h"        // queueStatusText — stall reports (Core-1 safe)
+#include "comms/mavlink_bridge.h"    // MAV_SEVERITY_*
 
 extern volatile uint32_t g_stack_hw[6];   // [5] = this task
 extern volatile bool g_thr_beep_req;      // set by Task_Buzzer; one-shot ESC beacon chirp
@@ -41,6 +41,10 @@ void Task_DShot_RMT(void* pv) {
     int16_t out[NUM_THRUSTERS] = {0};
     float   nrm[NUM_THRUSTERS] = {0};
     bool    armed = false, testing = false;
+    uint32_t out_seq = 0;         // control loop's publish counter, as last read
+    uint32_t seen_seq = 0;        // ...and the value it had on the previous cycle
+    uint32_t same_cycles = 0;     // consecutive cycles it has not moved
+    bool     ctl_stale = false;   // output-path watchdog latched (edge-reported)
     uint32_t stk_cnt = 0;
     int beep_frames = 0;      // when >0, tag outgoing frames with the beep flag
     bool prev_link = false;   // Pico link edge, for the gap-reason diagnostic
@@ -68,8 +72,45 @@ void Task_DShot_RMT(void* pv) {
                 for (int i = 0; i < NUM_THRUSTERS; ++i) { out[i] = g_state.thrusters.throttle[i]; nrm[i] = g_state.thrusters.norm[i]; }
                 armed = g_state.thrusters.armed;
                 testing = g_state.thrusters.test_override;
+                out_seq = g_state.thrusters.out_seq;
             }
         }
+
+        // --- Output-path watchdog. ---
+        // The cache above is re-sent every cycle, so a stalled or livelocked control loop
+        // used to look perfectly healthy downstream: fresh CRC-valid ARMED frames kept the
+        // Pico's link failsafe satisfied and the last demand was held indefinitely. Nothing
+        // read the loop's old liveness stamp. If the control loop has not published for
+        // CTRL_OUT_STALE_CYCLES of OUR cycles, send the disarmed stop — the same frame the
+        // disarmed path sends (DSHOT_DISARMED / zero norm / armed=false), which the Pico
+        // turns into a stop exactly as it does for a real disarm.
+        //
+        // Counted in cycles of this task, not wall time: see config.h for why (a flash write
+        // pauses both Core-1 tasks together and must not read as a control stall). A lock
+        // miss above keeps the cached out_seq, so a long run of misses trips it too — the
+        // cache it would re-send is exactly as stale.
+        //
+        // Not latched: control-loop state (armed, mode) stays authoritative, so if the loop
+        // comes back its next publish drives again. Sits ABOVE everything downstream in the
+        // precedence — this is the last point before the wire.
+        if (out_seq == seen_seq) { if (same_cycles < UINT32_MAX) ++same_cycles; }
+        else                     { seen_seq = out_seq; same_cycles = 0; }
+        const bool stale_now = same_cycles >= CTRL_OUT_STALE_CYCLES;
+        if (stale_now) {
+            for (int i = 0; i < NUM_THRUSTERS; ++i) { out[i] = DSHOT_DISARMED; nrm[i] = 0.0f; }
+            armed = false;
+            testing = false;
+        }
+        // Report edges only, and only once the loop has published at all: out_seq 0 means
+        // the control task has not run yet at boot, which is not a stall (the cache is
+        // already the disarmed stop), and must not produce a "resumed" on its first publish.
+        const bool report = stale_now && out_seq != 0;
+        if (report != ctl_stale) {
+            mav_stream::queueStatusText(report ? MAV_SEVERITY_CRITICAL : MAV_SEVERITY_INFO,
+                                        report ? "Control loop stalled - thrusters stopped"
+                                               : "Control loop resumed");
+        }
+        ctl_stale = report;
 
 #if THRUSTER_BACKEND == THRUSTER_PICO
         // One-shot ESC beacon chirp: latch the request and tag ~6 consecutive frames so

@@ -131,7 +131,7 @@ Outer angle loop: `error × ATC_ANG_*_P → desired rate`. Inner rate loop:
 ### Autotune & motor tuning (modes AUTOTUNE=21, MOTOR_TUNE=22)
 | Param | Default | What it does |
 |---|---|---|
-| `ATUNE` | 0 | Set 1 to start the flight-loop relay autotune (auto-resets). Or select AUTOTUNE mode. |
+| `ATUNE` | 0 | Set 1 to start the flight-loop relay autotune (auto-resets). Or select AUTOTUNE mode. **Arm first:** set while disarmed it is only *pending*, and arming is refused until it runs or `ATUNE=0` withdraws it. |
 | `ST_ANGLE_MAX` | 70 | Safety: tumbling angle (deg) that auto-disarms during a tune. |
 | `ST_RATE_MAX` | 360 | Safety: spin-out body rate (deg/s) that auto-disarms. |
 | `ST_DEPTH_DELTA` | 2.0 | Safety: depth runaway (m from tune start) that auto-disarms. |
@@ -233,7 +233,7 @@ success *and* refusal — is announced over `STATUSTEXT`.
 | `FS_GCS_ENABLE` **[R]** | 1 | GCS-loss failsafe → controlled SURFACE ascent. |
 | `FS_BAT_ENABLE` **[R]** | 1 | Low-battery failsafe enable (PM1). |
 | `FS_BAT_VOLTAGE` **[R]** | 13.2 | **THRUSTER**-pack low-battery threshold (V) — see the note below. For a 4S LiPo use **13.6** (3.4 V/cell). |
-| `ARMING_CHECK` **[R]** | 1 | 0 = skip pre-arm checks, 1 = enforce. |
+| `ARMING_CHECK` **[R]** | 1 | 0 = skip the sensor pre-arm checks, 1 = enforce. The mode check is **not** skipped: arming is always refused in STUNT / PATTERN / AUTOTUNE / MOTOR_TUNE / MOTOR_DETECT or with an autotune pending — arm, then select those. |
 | `ATUNE` **[R]** | 0 | Momentary trigger: set 1 → relay auto-tune of all PID loops (auto-resets to 0; NVS save deferred to the comms core). |
 | `ESPNOW_EN` **[R]** | 0 | Start the WiFi/ESP-NOW 2nd-board link (thruster-kill + thruster-pack voltage). Live within ~50 ms; **setting it back to 0 does not stop the radio** — that needs a reboot. |
 

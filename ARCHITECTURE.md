@@ -102,6 +102,11 @@ creep. What it actively does depends on the mode:
 | MOTOR_DETECT (20) | — | — | Pulses each thruster to detect direction |
 | STUNT/PATTERN (100/101) | scripted | scripted | Cmd-triggered rotations/sequences |
 
+**Arming is refused** in STUNT, PATTERN, AUTOTUNE, MOTOR_TUNE and MOTOR_DETECT, and while an
+`ATUNE`/`USER_5` autotune is pending (`arming::canArm`, not bypassed by `ARMING_CHECK=0`):
+each would start a scripted, full-authority manoeuvre the instant the vehicle armed. Arm in a
+flight mode, then select them.
+
 Entering **Depth Hold** captures the *current* depth as target (it doesn't dive to a
 preset); the throttle stick slews the target and re-locks on release. **No mode holds
 horizontal position** (no GPS/DVL/flow fusion yet) — current can drift the sub sideways.
@@ -129,6 +134,16 @@ linearization (`MOT_THST_EXPO`) → deadband lift into `[MOT_SPIN_MIN,1]` → 3D
 Failsafes (leak / low-batt / GCS-loss → SURFACE); arming enforcement (the 2nd-board
 thruster-kill is display-only, never gates arming); motor-test 2 Hz keep-alive with
 auto-disarm; deferred NVS writes on Core 0; stack high-water for all six tasks as `STK_*`.
+
+**Output-path watchdog** (`Task_DShot_RMT`). The DShot task re-sends its cached command every
+cycle, so a stalled control loop would otherwise keep the Pico fed with fresh ARMED frames and
+its link failsafe would never trip. The control loop bumps `ThrusterState::out_seq` on each
+publish; if the DShot task runs `CTRL_OUT_STALE_CYCLES` (10 = 20 ms) cycles without seeing it
+move, it sends the disarmed stop and reports `Control loop stalled - thrusters stopped`
+(`Control loop resumed` when it comes back — not latched). Counted in cycles, not ms, so a
+flash write that pauses both Core-1 tasks together is not mistaken for a stall. The ESP-IDF
+task watchdog is **not** subscribed for the flight tasks: its 5 s timeout is far too slow to
+matter next to this, and its action is a reboot.
 
 ---
 

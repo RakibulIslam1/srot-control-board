@@ -544,7 +544,7 @@ void Task_ControlLoop(void* pv) {
         }
         // Explain the two ways these silently do nothing, instead of leaving the pilot guessing.
         if (in.mode == FlightMode::MOTOR_TUNE && !in.armed && !prev_mtune)
-            ui_log::set("MTune: arm to start");
+            ui_log::set("MTune: arm, then select");   // canArm refuses arming IN this mode
         if (in.mode == FlightMode::MOTOR_TUNE && g_params.mtune_en <= 0.5f && !prev_mtune)
             ui_log::set("MTune off: set MTUNE_EN=1");
         prev_autotune = at_active;
@@ -753,9 +753,16 @@ void Task_ControlLoop(void* pv) {
         // transient sensor-mutex miss ("state busy"), on a 150 ms BNO085 reset-recovery
         // window, and even on "calibrating" — which made MOTOR_DETECT impossible, since it
         // sets cal.routine itself. For a submarine, cutting the thrusters mid-water is
-        // worse than flying on the last known attitude: roll/pitch/yaw already hold their
-        // last-good values, so we keep control and just say so.
+        // worse than losing attitude control, so we keep depth and translation and turn
+        // the attitude axes OFF (see `imu_bad` below the mixer inputs).
+        //
+        // "Holding the last attitude" is what this used to claim, and it was false: a frozen
+        // angle against a fixed target is a CONSTANT angle error, the outer loop turned it
+        // into a constant desired rate, and the rate PID against the zeroed gyro answered
+        // with constant P plus an integrator ramping to IMAX — a steady torque for as long
+        // as the IMU stayed down, while the GCS was told the vehicle was holding.
         bool armed = in.armed;
+        bool imu_bad = false;   // debounced IMU loss, for the demand gate further down
         {
             static bool     s_imu_bad = false;      // debounced state
             static uint32_t s_bad_since = 0;
@@ -773,9 +780,10 @@ void Task_ControlLoop(void* pv) {
                     // unconditionally, so a disarmed bench board announced itself as armed --
                     // exactly the claim an operator acts on, and the one it must never get
                     // wrong. `armed` is right here and was already being read.
+                    // <= 50 chars (STATUSTEXT.text); says what the vehicle now DOES.
                     mav_stream::queueStatusText(MAV_SEVERITY_ERROR,
-                        armed ? "IMU lost - holding last attitude, STILL ARMED"
-                              : "IMU lost - holding last attitude (disarmed)");
+                        armed ? "IMU lost - attitude control off, STILL ARMED"
+                              : "IMU lost - attitude control off (disarmed)");
                 }
             } else {
                 s_bad_since = 0;
@@ -788,6 +796,7 @@ void Task_ControlLoop(void* pv) {
             // rate to the rate PIDs winds their integrators up against an error that can
             // never be corrected, so zero the rates instead of holding them.
             if (s_imu_bad) { in.gx = 0; in.gy = 0; in.gz = 0; }
+            imu_bad = s_imu_bad;
         }
 
         // --- Motor test override takes precedence over the mixer. ---
@@ -877,9 +886,32 @@ void Task_ControlLoop(void* pv) {
                 computeDemands(in, dt, roll, pitch, yaw, thr, fwd, lat);
                 // Model-based feedforward (drag + cross-coupling + CoB auto-trim). Learn
                 // the trim only when the pilot sticks are near centre.
+                // Never learn while the IMU is lost: the trim is learned from the rate
+                // integrators, which are being held at zero below.
                 bool learn = fabsf(in.sp_roll) < 0.1f && fabsf(in.sp_pitch) < 0.1f &&
-                             fabsf(in.sp_yaw) < 0.1f && fabsf(in.sp_throttle) < 0.1f;
+                             fabsf(in.sp_yaw) < 0.1f && fabsf(in.sp_throttle) < 0.1f &&
+                             !imu_bad;
                 feedforward::apply(roll, pitch, yaw, thr, in.gx, in.gy, in.gz, in.mode, learn);
+            }
+
+            // IMU lost: attitude control OFF. Every closed-loop attitude path (STABILIZE,
+            // DEPTH_HOLD, SURFACE, AUTO, ACRO, STUNT, PATTERN, AUTOTUNE, and the feedforward
+            // trim added just above) is acting on a frozen angle and a zeroed gyro, which
+            // yields a constant torque, not a hold. Zero the three attitude demands and keep
+            // the rate integrators empty, so recovery starts clean instead of releasing a
+            // wound-up I-term. reset() also re-arms heading capture, so a recovered IMU
+            // (whose yaw may have re-zeroed after a BNO reset) holds where it IS rather than
+            // swinging back to a heading from before the loss.
+            //
+            // Depth and translation are untouched: they do not depend on the IMU, and
+            // keeping them is what lets a SURFACE failsafe still surface.
+            //
+            // MANUAL is exempt — its roll/pitch/yaw are the pilot's sticks passed straight
+            // through, not a controller, and a pilot flying by hand is the best attitude
+            // control left once the IMU is gone.
+            if (imu_bad && in.mode != FlightMode::MANUAL) {
+                roll = 0; pitch = 0; yaw = 0;
+                attitude::reset();
             }
 
             // FRAME_REVERSE: negate every axis demand, right before mixing.
@@ -920,11 +952,14 @@ void Task_ControlLoop(void* pv) {
                                                         : (norm[i] * (float)in.dir[i]);
                 }
                 g_state.thrusters.armed = armed;
+                // Liveness for the DShot task's output-path watchdog. Bumped only when the
+                // publish lands, so a run of lock misses reads as stale too — which it is.
+                // (Replaces ControlState::loop_stamp_ms, which was written here every cycle
+                // and read nowhere.)
+                static uint32_t s_out_seq = 0;
+                if (++s_out_seq == 0) s_out_seq = 1;   // 0 is reserved for "never published"
+                g_state.thrusters.out_seq = s_out_seq;
             }
-        }
-        {
-            StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(1));
-            if (lk.ok()) g_state.control.loop_stamp_ms = millis();
         }
 
         // Publish movement state for Task_MAVLink (ACK progress/complete + telemetry).

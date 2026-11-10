@@ -12,6 +12,7 @@
 #include "drivers/analog_mon.h"   // voltMultLooksStale() — PM1_VMULT advisory on set
 #include "config.h"
 #include "state_types.h"
+#include <atomic>
 
 // Custom high-level move command (COMMAND_LONG, no dialect regen). See docs/JETSON_COMMS.md.
 #ifndef MAV_CMD_SROT_MOVE
@@ -68,27 +69,51 @@ static const uint32_t PARAM_STREAM_MAX_MS = 30000;
 // fail after the companion has been heard at least once. No Jetson on the bench => it was
 // never seen => it cannot be "lost" => nothing changes. Jetson dies mid-mission => it WAS
 // seen => the failsafe fires even though Bondor is still chattering. Both cases correct.
-static uint32_t s_gcs_last_ms = 0;
-static bool     s_gcs_seen = false;
-static uint32_t s_companion_last_ms = 0;
-static bool     s_companion_seen = false;
+//
+// CROSS-CORE. The stamps are written on Core 0 (Task_MAVLink, Task_LoRa_SD) and read on
+// Core 1 by the failsafe in the control loop, so they are atomics and every access below is
+// ordered on purpose:
+//   * writer: stamp FIRST, then `seen`. The other order let a reader see seen=true beside a
+//     stamp still 0, i.e. an age of ~millis() — "lost" on the very first heartbeat.
+//   * reader: `seen`, then the stamp into a local, THEN millis(). The old
+//     `millis() - s_last` left the two operand reads unsequenced; if millis() was read
+//     before a newer stamp landed, the unsigned difference wrapped to ~4.29e9, read as
+//     "companion lost", and the failsafe latched SURFACE on a healthy link.
+//   * the age is SIGNED, and a negative age (stamp newer than our clock read) is fresh.
+// 32-bit atomics are lock-free on the ESP32, so this costs Core 1 nothing and never blocks.
+static std::atomic<uint32_t> s_gcs_last_ms{0};
+static std::atomic<bool>     s_gcs_seen{false};
+static std::atomic<uint32_t> s_companion_last_ms{0};
+static std::atomic<bool>     s_companion_seen{false};
+
+static void stampLink(std::atomic<uint32_t>& last_ms, std::atomic<bool>& seen) {
+    last_ms.store(millis());   // stamp before seen — see above
+    seen.store(true);
+}
+
+// Signed age of a link stamp, loaded BEFORE the clock is read. Negative = fresh.
+static int32_t linkAgeMs(const std::atomic<uint32_t>& last_ms) {
+    const uint32_t stamp = last_ms.load();
+    return (int32_t)(millis() - stamp);
+}
 
 bool gcsLinkOk() {
-    return s_gcs_seen && (millis() - s_gcs_last_ms < GCS_FAILSAFE_MS);
+    if (!s_gcs_seen.load()) return false;
+    return linkAgeMs(s_gcs_last_ms) < (int32_t)GCS_FAILSAFE_MS;
 }
 
 // True when a NAMED companion has been seen and has now gone quiet. False both when no
 // companion is configured and when one is configured but has never appeared.
 bool companionLost() {
-    if (!s_companion_seen) return false;                       // never seen => cannot be lost
-    return (millis() - s_companion_last_ms) >= GCS_FAILSAFE_MS;
+    if (!s_companion_seen.load()) return false;               // never seen => cannot be lost
+    return linkAgeMs(s_companion_last_ms) >= (int32_t)GCS_FAILSAFE_MS;
 }
 
 bool companionConfigured() {
     return ((int)g_params.fs_gcs_sysid != 0) || ((int)g_params.fs_gcs_compid != 0);
 }
 
-bool companionSeen() { return s_companion_seen; }
+bool companionSeen() { return s_companion_seen.load(); }
 
 // Does this heartbeat come from the configured companion? A field set to 0 is a WILDCARD, so
 // 0/0 restores the old "any non-self heartbeat" behaviour exactly — the escape hatch for an
@@ -99,8 +124,7 @@ static bool matchesCompanion(uint8_t sysid, uint8_t compid) {
 }
 
 void feedGcs() {
-    s_gcs_seen = true;
-    s_gcs_last_ms = millis();
+    stampLink(s_gcs_last_ms, s_gcs_seen);
 }
 
 bool paramDownloadActive() { return s_param_streaming; }
@@ -159,6 +183,23 @@ static void ackCommand(uint16_t command, uint8_t result) {
 }
 
 static void setArmed(bool armed);   // forward decl (defined below)
+
+// Gate for commands that are only safe on a DISARMED vehicle. Returns MAV_RESULT_ACCEPTED
+// ("go ahead") only when the vehicle is positively known to be disarmed; otherwise says why
+// and returns TEMPORARILY_REJECTED — a terminal ACK, and the honest one: disarm and retry.
+// A lock miss is "don't know", and "don't know" refuses. Core 0 only (sendStatusText).
+static uint8_t disarmedGate(const char* what) {
+    bool known = false, armed = false;
+    {
+        StateLock lk(g_state.mtx_control, pdMS_TO_TICKS(5));
+        if (lk.ok()) { known = true; armed = g_state.control.armed; }
+    }
+    if (known && !armed) return MAV_RESULT_ACCEPTED;
+    char b[50];   // STATUSTEXT.text is char[50]
+    snprintf(b, sizeof(b), known ? "%s refused: disarm first" : "%s refused: state busy", what);
+    mav_stream::sendStatusText(MAV_SEVERITY_WARNING, b);
+    return MAV_RESULT_TEMPORARILY_REJECTED;
+}
 
 // Modes the GCS dropdown may select. STUNT/PATTERN are command-only.
 static bool isSupportedMode(uint8_t m) {
@@ -407,6 +448,13 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
             // ArduPilot param semantics:
             //   p1=1 gyro, p2=1 mag, p3=1 baro, p4=1 radio(ignored),
             //   p5=1 full accel (6-point), p5=2/4 quick LEVEL (AHRS trim).
+            //
+            // DISARMED ONLY. Every one of these assumes a vehicle at rest, and on an armed
+            // one they write a wrong reference into live control: BARO_ZERO at depth makes
+            // that depth "0 m", so the failsafe's surface-then-disarm logic disarms AT DEPTH;
+            // a gyro or level cal averages the vehicle's own motion into the offsets.
+            { const uint8_t g = disarmedGate("Calibration");
+              if (g != MAV_RESULT_ACCEPTED) return g; }
             CalRoutine r = CalRoutine::NONE;
             if (p[0] == 1)      { r = CalRoutine::GYRO;      mav_stream::sendStatusText(MAV_SEVERITY_INFO, "Calibrating gyros"); }
             else if (p[1] == 1) { r = CalRoutine::MAG; }
@@ -452,6 +500,13 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
             if (p[0] == 2) {
                 // Recovery path when a stored value is wrong and you don't want to
                 // reflash (e.g. a stale RPM_LOOP=0 frozen in by a MOTOR_TUNE saveAll).
+                //
+                // DISARMED ONLY. The reset is LIVE: every gain, FRAME_REVERSE and each
+                // MOT_n_DIR (plus the learned motor directions below) change under a running
+                // controller — on this hull FRAME_REVERSE=1, so a reset mid-dive inverts every
+                // axis in one step. A save (p1=1) stays allowed: it changes nothing live.
+                { const uint8_t g = disarmedGate("Param reset");
+                  if (g != MAV_RESULT_ACCEPTED) return g; }
                 params::resetAllToDefaults();
                 // Also clear the SEPARATE per-motor direction learned by MOTOR_DETECT.
                 // It multiplies with MOT_n_DIRECTION, so a bad bench detect (gyro reads
@@ -577,6 +632,10 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
         case MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN:
             // param1: 1 = reboot autopilot, 3 = reboot to bootloader.
             if ((int)p[0] == 1 || (int)p[0] == 3) {
+                // DISARMED ONLY. A restart drops every thruster mid-water and comes back
+                // disarmed in MANUAL at an unknown depth; the operator disarms first.
+                { const uint8_t g = disarmedGate("Reboot");
+                  if (g != MAV_RESULT_ACCEPTED) return g; }
                 ackCommand(command, MAV_RESULT_ACCEPTED);      // ack now — restart never returns
                 mav_stream::sendStatusText(MAV_SEVERITY_INFO, "SROT: rebooting");
                 MAVLINK_SERIAL.flush();
@@ -644,9 +703,15 @@ static void onParamSet(const mavlink_message_t& msg) {
             mav_stream::sendStatusText(MAV_SEVERITY_ERROR, wb);
         }
         // ATUNE is a momentary trigger: setting it ≥1 starts the relay auto-tune.
-        if (strncmp(name, "ATUNE", 16) == 0 && ps.param_value >= 1.0f) {
+        // ATUNE=0 withdraws a trigger that has not started yet. Without this, a trigger set
+        // while disarmed could only be cleared by arming — which starts the tune — and
+        // canArm() now refuses to arm with one pending, so it would be a dead end.
+        if (strncmp(name, "ATUNE", 16) == 0) {
             StateLock lk(g_state.mtx_control);
-            if (lk.ok()) g_state.control.autotune_active = true;
+            if (lk.ok()) {
+                if (ps.param_value >= 1.0f)        g_state.control.autotune_active = true;
+                else if (!g_state.control.armed)   g_state.control.autotune_active = false;
+            }
         }
         // Pin assignments only take effect after a reboot (ArduPilot-style).
         if (strncmp(name, "PIN_", 4) == 0) {
@@ -747,13 +812,10 @@ void handle(const mavlink_message_t& msg) {
         case MAVLINK_MSG_ID_HEARTBEAT:
             // Any heartbeat that isn't ours counts as a live GCS/companion link.
             if (msg.compid != MAV_COMPONENT_ID || msg.sysid != MAV_SYSTEM_ID) {
-                s_gcs_seen = true;
-                s_gcs_last_ms = millis();
+                stampLink(s_gcs_last_ms, s_gcs_seen);
                 // ...and separately, is this the companion the failsafe is scoped to?
-                if (companionConfigured() && matchesCompanion(msg.sysid, msg.compid)) {
-                    s_companion_seen = true;
-                    s_companion_last_ms = millis();
-                }
+                if (companionConfigured() && matchesCompanion(msg.sysid, msg.compid))
+                    stampLink(s_companion_last_ms, s_companion_seen);
             }
             break;
         case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
