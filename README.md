@@ -13,8 +13,14 @@ command set (`MAV_CMD_SROT_MOVE`) shaped like a ROS 2 action: the Jetson sends *
 failsafes. What it lacks is a state estimator, position control and replay logging — both sides
 of that trade are written up in **[docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md)**.
 
+![SROT and Hengla: the companion sends intent; the board owns attitude, depth, mixing and failsafes](docs/media/system.svg)
+
+![Intent, not sticks: one MOVE goal in, one answer out](docs/media/intent.svg)
+
 Ground station is **Bondor**. BlueOS works for routing, MAVLink2Rest and video, but its
 ArduPilot-gated setup pages stay empty by design — see **[docs/BLUEOS.md](docs/BLUEOS.md)**.
+
+![Bondor, the ground station, on the Dive page: attitude, heading, depth, both batteries, leak, per-thruster RPM](docs/media/bondor-dive.jpg)
 
 Part of the **SROT** control-board suite:
 
