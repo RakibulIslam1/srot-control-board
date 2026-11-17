@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 520" font-family="IBM Plex Sans, system-ui, sans-serif">
+<rect width="1000" height="520" rx="10" fill="#0b0e12"/>
+<text x="32" y="44" fill="#eef1f5" font-size="20" font-weight="600">SROT + Hengla: who talks to whom</text>
+<text x="32" y="68" fill="#8a94a3" font-size="14">The companion computer sends intent. The board owns attitude, depth, mixing, braking and failsafes.</text>
+<g font-size="14">
+<rect x="32" y="110" width="200" height="86" rx="8" fill="#13202c" stroke="#2a3a4a"/><text x="132" y="142" fill="#eef1f5" text-anchor="middle" font-weight="600">Jetson / Pi</text><text x="132" y="164" fill="#8a94a3" text-anchor="middle" font-size="12">ROS 2, vision, mission</text><text x="132" y="182" fill="#8a94a3" text-anchor="middle" font-size="12">"forward 3 m", "yaw 90°"</text>
+<rect x="32" y="300" width="200" height="86" rx="8" fill="#13202c" stroke="#2a3a4a"/><text x="132" y="332" fill="#eef1f5" text-anchor="middle" font-weight="600">Bondor</text><text x="132" y="354" fill="#8a94a3" text-anchor="middle" font-size="12">desktop ground station</text><text x="132" y="372" fill="#8a94a3" text-anchor="middle" font-size="12">or QGC / BlueOS</text>
+<rect x="32" y="420" width="200" height="60" rx="8" fill="#13202c" stroke="#2a3a4a"/><text x="132" y="448" fill="#eef1f5" text-anchor="middle">ESP32-C3 LoRa bridge</text><text x="132" y="466" fill="#8a94a3" text-anchor="middle" font-size="12">MAVLink over radio</text>
+<rect x="330" y="160" width="300" height="250" rx="10" fill="#101a24" stroke="#00a0ff" stroke-width="2"/>
+<text x="480" y="192" fill="#00a0ff" text-anchor="middle" font-size="17" font-weight="600">ESP32 · Hengla</text>
+<text x="350" y="224" fill="#eef1f5" font-size="13">Core 1, flight only, 500 Hz</text>
+<text x="350" y="244" fill="#8a94a3" font-size="12">sensors → modes → cascade PID → mixer</text>
+<text x="350" y="282" fill="#eef1f5" font-size="13">Core 0, comms and UI</text>
+<text x="350" y="302" fill="#8a94a3" font-size="12">MAVLink 100 Hz · OLED · buzzer · LoRa · SD</text>
+<text x="350" y="340" fill="#eef1f5" font-size="13">Failsafes</text>
+<text x="350" y="360" fill="#8a94a3" font-size="12">leak · low battery · GCS loss → SURFACE</text>
+<text x="350" y="388" fill="#8a94a3" font-size="12">no flash write ever on the flight loop</text>
+<rect x="720" y="110" width="250" height="70" rx="8" fill="#13202c" stroke="#2a3a4a"/><text x="845" y="140" fill="#eef1f5" text-anchor="middle">BNO085 IMU</text><text x="845" y="160" fill="#8a94a3" text-anchor="middle" font-size="12">fused quaternion, 400 Hz, I2C</text>
+<rect x="720" y="196" width="250" height="60" rx="8" fill="#13202c" stroke="#2a3a4a"/><text x="845" y="222" fill="#eef1f5" text-anchor="middle">Bar30 depth</text><text x="845" y="242" fill="#8a94a3" text-anchor="middle" font-size="12">~20 Hz, off the fast path</text>
+<rect x="720" y="290" width="250" height="80" rx="8" fill="#1c2a1a" stroke="#3b5a35"/><text x="845" y="318" fill="#8dff6a" text-anchor="middle">RP2350 co-processor</text><text x="845" y="338" fill="#8a94a3" text-anchor="middle" font-size="12">bidirectional DShot to 8 ESCs</text><text x="845" y="356" fill="#8a94a3" text-anchor="middle" font-size="12">real RPM back, per thruster</text>
+<rect x="720" y="400" width="250" height="80" rx="8" fill="#13202c" stroke="#2a3a4a"/><text x="845" y="428" fill="#eef1f5" text-anchor="middle">2nd board</text><text x="845" y="448" fill="#8a94a3" text-anchor="middle" font-size="12">thruster power switch</text><text x="845" y="466" fill="#8a94a3" text-anchor="middle" font-size="12">pack voltage over ESP-NOW</text>
+</g>
+<g stroke="#8a94a3" stroke-width="2" fill="none">
+<path d="M232 153 C290 153 290 210 330 210"/><path d="M232 343 C290 343 290 320 330 320"/><path d="M232 450 C300 450 300 380 330 380"/>
+<path d="M630 200 C680 200 680 145 720 145"/><path d="M630 230 C680 230 680 226 720 226"/>
+<path d="M630 330 H720" stroke="#8dff6a"/><path d="M630 380 C680 380 680 440 720 440"/>
+</g>
+<g font-size="11" fill="#8a94a3"><text x="244" y="134">MAV_CMD_SROT_MOVE</text><text x="250" y="312">MAVLink</text><text x="650" y="322">UART link</text></g>
+</svg>

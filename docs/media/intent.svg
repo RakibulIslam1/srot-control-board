@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" font-family="IBM Plex Sans, system-ui, sans-serif">
+<rect width="1000" height="300" rx="10" fill="#0b0e12"/>
+<text x="32" y="44" fill="#eef1f5" font-size="20" font-weight="600">Intent, not sticks</text>
+<text x="32" y="68" fill="#8a94a3" font-size="14">ArduSub expects a pilot moving joysticks. Hengla takes a goal and reports when it's done, like a ROS 2 action.</text>
+<g font-size="13">
+<text x="32" y="114" fill="#8a94a3">ArduSub style</text>
+<g fill="#13202c" stroke="#2a3a4a"><rect x="160" y="96" width="60" height="28"/><rect x="226" y="96" width="60" height="28"/><rect x="292" y="96" width="60" height="28"/><rect x="358" y="96" width="60" height="28"/><rect x="424" y="96" width="60" height="28"/><rect x="490" y="96" width="60" height="28"/><rect x="556" y="96" width="60" height="28"/><rect x="622" y="96" width="60" height="28"/></g>
+<text x="700" y="115" fill="#8a94a3">RC overrides, every cycle</text>
+<text x="32" y="184" fill="#00a0ff">Hengla</text>
+<rect x="160" y="166" width="150" height="28" fill="#101a24" stroke="#00a0ff"/><text x="235" y="185" fill="#eef1f5" text-anchor="middle">MOVE fwd 3 m</text>
+<rect x="320" y="166" width="300" height="28" fill="#13202c" stroke="#2a3a4a"/><text x="470" y="185" fill="#8a94a3" text-anchor="middle">board ramps, holds depth and heading, brakes</text>
+<rect x="630" y="166" width="90" height="28" fill="#1c2a1a" stroke="#3b5a35"/><text x="675" y="185" fill="#8dff6a" text-anchor="middle">ACK done</text>
+<text x="740" y="185" fill="#8a94a3">one goal, one answer</text>
+<text x="32" y="246" fill="#8a94a3" font-size="13">What Hengla gives up for this: no state estimator, no position control, no replay logs. Both sides of the trade: docs/VS_ARDUSUB.md</text>
+</g></svg>
