@@ -4,12 +4,20 @@ Where the project is going (and why), the sourced research behind each decision,
 chronological progress log. Architecture: `ARCHITECTURE.md`; hardware: `HARDWARE.md`;
 parameters: `PARAMETERS.md`.
 
-## Status (2026-07-31)
-Core firmware complete + four audit rounds deep. QGC/BlueOS ArduSub compatibility working
-(Motor Test, sensor cal, live Tuning). **Phase 1** precision control shipped. **Phase 2b**
-(Pico 2 thruster + RPM co-processor) Stages 1–2 built — awaiting bench bring-up. Three boards
-build from one project (`pio run` / `-e pico` / `-e second-board`). **Next:** Phase 2a
-(model-based control), then Phase 2c (BlueOS/Jetson autonomy).
+## Current documentation status (2026-11-22)
+
+Hengla implements attitude/depth control, AUTO motion primitives, RPM telemetry,
+tuning routines and LoRa/Bondor integration. High-level compute integration uses a
+ROS workspace over direct USB MAVLink; Hengla identifies as `MAV_AUTOPILOT_GENERIC`.
+Three MCU targets build here (`pio run` / `-e pico` / `-e second-board`); the ground
+station and ESC flasher have separate repositories.
+
+Horizontal position hold and the vision-control interface remain integration work.
+RPM closed-loop control is default-off; optional trim/compensation features still
+need water validation. This documentation update changes naming and design
+explanations, not firmware behaviour, the wire contract or existing tuning.
+The dated progress entries below retain the development history; use the current
+code, [architecture](ARCHITECTURE.md) and [comparison](docs/VS_ARDUSUB.md) for present capabilities.
 
 > **This build changes the LoRa air format.** Both LoRa boards — the vehicle and the ground
 > station — must be reflashed together, or the link stays silent. See the progress-log entry
@@ -19,14 +27,18 @@ build from one project (`pio run` / `-e pico` / `-e second-board`). **Next:** Ph
 
 ## The big questions, answered
 
-### Can a focused ESP32 system beat Pixhawk/ArduSub?
-**Yes — in a narrow niche, no — in general.** For a small tethered sub doing precise
-low-speed **attitude + depth + short-horizon hold**, a purpose-built controller can
-match or beat stock ArduSub through specialization: lower latency, a thrust model
-tuned to *your* thrusters, a 500 Hz flight loop on an isolated core, and an optional
-RPM layer. Where Pixhawk stays ahead: **EKF3 sensor-fusion robustness**, sensor
-breadth (DVL/USBL/sonar drivers), mature failsafes, and the whole ground-station /
-logging ecosystem. Strategy: specialize where we win, don't try to reimplement EKF3.
+### Why choose SROT for autonomous AUV missions and ROV operations?
+
+**SROT is our preferred architecture for this project's workflow.** The ROS workspace
+owns perception and mission sequencing, while a dedicated 500 Hz control core owns
+attitude, depth and motion execution. Per-thruster RPM feedback and Bondor give the
+operator a propulsion-aware interface, and a focused mode set exposes the behaviours
+needed for the job.
+
+Localization and position-hold integration belong in that development plan; they
+are not implemented by the current timed-move controller. Compare complete systems
+through measurements and mission tests. The architectural rationale and current
+implementation boundaries are in [Hengla vs ArduSub](docs/VS_ARDUSUB.md).
 
 ### Micro-movements (2°/s yaw, target-angle, fine translation) — what actually enables them
 Ranked by leverage (from research):
@@ -342,7 +354,7 @@ behaviour. Parameter IDs keep the ArduPilot convention on purpose (descriptive, 
   same cascade — the model terms silently skipped the companion's mode.
 - **B9:** the AUTO depth-runaway guard was a **permanent no-op** (`depth0 = current depth`), so
   AUTO had no depth protection at all. Now guards against `depth::target()`.
-- Plus stale comments corrected (200 Hz claims that were really 400/500, a stray **"Mongla"**
+- Plus stale comments corrected (200 Hz claims that were really 400/500, a stray **"companion"**
   reference, the `DEF_ST_RPM_MAX` justification).
 
 **New `env:second-board`** — `example/2nd_board_firmware/` was 240 lines compiled by nothing.
@@ -354,10 +366,9 @@ consume a thruster-pack voltage nothing transmitted, and the control board's own
 lives on SROT), and the C3 receive dropped with it. Wire format moved to
 `shared/espnow_proto.h` so both boards compile one definition instead of a hand-copied comment.
 
-**New docs:** [AUDIT.md](AUDIT.md), [docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md) (including a
-substantial section on where **ArduSub is still clearly ahead** — no EKF, no position
-estimation, no replay logging, no redundancy, far more field testing), and
-[docs/BLUEOS.md](docs/BLUEOS.md).
+**New docs:** [AUDIT.md](AUDIT.md), [docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md) and
+[docs/BLUEOS.md](docs/BLUEOS.md). The comparison now explains why we choose SROT
+for autonomous and ROV workflows, with explicit implementation and validation boundaries.
 
 **Recommended upgrades, ranked by value per unit of risk:**
 1. ~~B1-B3~~ (done).
@@ -617,7 +628,7 @@ Three problems that surfaced from actually flying the board.
 
 ### 2026-07-27 — AUTO movement mode: Jetson-offloaded, RPM-braked motion primitives
 - **`FlightMode::AUTO=23`** + **`control/movement`** — one state machine for every high-level verb
-  (forward / back / strafe / turn / dive / arc / style / stop / hold). The Jetson ("Mongla") sends
+  (forward / back / strafe / turn / dive / arc / style / stop / hold). The Jetson (the high-level compute) sends
   intent; the ESP32 owns the primitive: heading + depth hold, ramps, and braking.
 - **Voltage-independent + on-board braking (no drift)** — cruise runs at an **RPM-held** speed (via
   the Pico loop), so duration×speed = same distance at any battery; at the end the ESP32 applies
@@ -801,9 +812,9 @@ controller**.
 - **MPU9250** on QGC's Sensors page is cosmetic (decoded from the dummy `INS_ACC_ID`;
   ArduPilot has no BNO085 devtype) — documented, not fixable.
 - Docs: updated `PARAMETERS.md` (ATC_* gains, new dummy groups, MPU9250 note) and
-  `tuning_guide.md`; **new `CONTROL_LOOP.md`** (pipeline + honest SROT-vs-ArduPilot
-  comparison: SROT wins on latency/core-isolation/DShot, ArduPilot wins on EKF
-  fusion/position-nav/failsafes).
+  `tuning_guide.md`; **new `CONTROL_LOOP.md`** (the original pipeline/comparison
+  document). The current architecture and design comparison are now maintained in
+  `ARCHITECTURE.md` and `docs/VS_ARDUSUB.md`.
 - Fundamental constraint recorded: QGC's Motor Test tab + Sub setup pages are
   inseparable from the ArduSub identity and its param demands; can't show "SROT"/
   "BNO085" in QGC's ArduSub UI. SROT identity kept on OLED/BlueOS/custom-version.

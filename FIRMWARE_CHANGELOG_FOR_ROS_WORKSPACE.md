@@ -1,4 +1,6 @@
-# Firmware changes for `duburi_ws` — 2026-08-01 (Round 6)
+# Firmware changes for the ROS workspace — 2026-08-01 (Round 6)
+
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
 
 **Written for the companion team.** This is our reply to
 [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md). Every item you raised is answered below: fixed,
@@ -130,7 +132,7 @@ tell us if it does not.
 ### §6 — `MV_STATE` off-by-one and dead progress — **FIXED (both halves)**
 
 - Docs corrected: **6 is HOLD, 7 is DONE**. `JETSON_COMMS.md` was the one still wrong; we had
-  already fixed `DUBURI_WS_INTEGRATION.md`.
+  already fixed `HIGH_LEVEL_COMPUTE_INTEGRATION.md`.
 - **`progress()` now returns real values for TURN and DIVE.** They latch the span at start (angle
   or depth to cover) and divide the live remaining error — which both completion tests already
   computed. Capped at 0.99 so only the terminal state reports 1.0, letting you distinguish
@@ -158,7 +160,7 @@ Two things to know:
 - Temperature / voltage / current are **0 = not instrumented**, not "measured zero". The Pico
   link does not report them yet.
 
-`/duburi/esc_rpm` should build now.
+`/auv/esc_rpm` should build now.
 
 ### §9 — Round-3 notes — **FIXED**
 
@@ -265,7 +267,7 @@ bench (COM19, 2026-08-01): the board reports **2**.
 **`0` means "firmware older than 2026-08-01", not "unknown"** — that build never populated the
 field. Fail closed on `0`.
 
-Suggested host use, and what the PR to `duburi_ws` actually does: read it at connect **and**
+Suggested host use, and what the PR to the ROS workspace actually does: read it at connect **and**
 inside `arm()`, and refuse to arm below your required revision. Keep the drift test as well —
 it is a useful workstation tripwire — but do not let it be the only check.
 
@@ -349,7 +351,7 @@ Our headroom is waiting: free UART1, a spare VSPI CS, 2.16 MB flash and ~75 % RA
 
 ---
 
-## Suggestions for `duburi_ws`, offered not imposed
+## Suggestions for the ROS workspace, offered not imposed
 
 These come from reading your stack; push back freely.
 
@@ -388,9 +390,9 @@ need your action to verify:
 | 3 | Arm, hold a stick, unplug the Jetson → ascends with **zero** translation and yaw | either |
 | 4 | `stop` after a translate leg **decelerates**; remove your host brake in the same session | yours |
 | 5 | `DIVE` to a negative target → refused/clamped, not ascent | yours |
-| 6 | `/duburi/esc_rpm` populates | yours |
+| 6 | `/auv/esc_rpm` populates | yours |
 | 7 | `SET_MESSAGE_INTERVAL(ATTITUDE, 20000)` → 50 Hz arrives | yours |
 | 8 | Pilot **selects** SURFACE deliberately → **must NOT auto-disarm**. Only a failsafe-forced SURFACE disarms at the top | ours + yours |
 
 ⛔ **Unchanged standing gate:** the depth loop has still never run closed. The two bench checks in
-`DUBURI_WS_INTEGRATION.md` gate every dive-dependent verb, and §7's clamp does not change that.
+`HIGH_LEVEL_COMPUTE_INTEGRATION.md` gate every dive-dependent verb, and §7's clamp does not change that.

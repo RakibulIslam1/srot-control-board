@@ -1,7 +1,9 @@
 # Jetson-side feedback on Hengla v0.2.0
 
-Written by the **`duburi_ws` (Mongla)** side — the ROS 2 companion that drives this board
-over MAVLink. Read alongside `DUBURI_WS_INTEGRATION.md` and `JETSON_COMMS.md`, which are
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
+
+Written by the **the ROS workspace (ROS 2)** side — the ROS 2 companion that drives this board
+over MAVLink. Read alongside `HIGH_LEVEL_COMPUTE_INTEGRATION.md` and `JETSON_COMMS.md`, which are
 the contract this document reports against.
 
 **Reviewed at:** `8cb4203` (Round 3). Firmware read in full: `mav_commands.cpp`,
@@ -167,7 +169,7 @@ Related: **no `COMMAND_CANCEL`.** The only way to cancel a move is to send anoth
 enum { PH_IDLE=0, PH_CRUISE, PH_BRAKE, PH_TURN, PH_DIVE, PH_STYLE, PH_HOLD, PH_DONE };
 ```
 
-`HOLD = 6`, `DONE = 7`. Both `JETSON_COMMS.md:277` and `DUBURI_WS_INTEGRATION.md:217`
+`HOLD = 6`, `DONE = 7`. Both `JETSON_COMMS.md:277` and `HIGH_LEVEL_COMPUTE_INTEGRATION.md:217`
 document **`6 = done`**. A client decoding `MV_STATE` reads every station-keep leg as
 complete — and station-keep is precisely what a companion holds a position with while it
 aligns a camera or fires a payload.
@@ -227,7 +229,7 @@ the temperature/voltage/current fields that `ESC_STATUS` is currently sending as
 (`mav_stream.cpp:155`).
 
 We have added the 11030/11031 read path on our side already, so this works the moment the
-board sends it. Until then `/duburi/esc_rpm` cannot be built.
+board sends it. Until then `/auv/esc_rpm` cannot be built.
 
 ---
 
@@ -261,7 +263,7 @@ cost us time, all verified against `8cb4203`:
 | "Every command reaches exactly one terminal result" | `JETSON_COMMS.md:157` | Item 1 above |
 | "stop … (brake to a halt)" | `JETSON_COMMS.md:108` | Item 2 above |
 | "DIVE p2 … Clamped at ≥ 0" | `JETSON_COMMS.md:247` | Item 7 above |
-| "6 = done" for `MV_STATE` | `JETSON_COMMS.md:277`, `DUBURI_WS_INTEGRATION.md:217` | `HOLD=6`, `DONE=7` |
+| "6 = done" for `MV_STATE` | `JETSON_COMMS.md:277`, `HIGH_LEVEL_COMPUTE_INTEGRATION.md:217` | `HOLD=6`, `DONE=7` |
 | "a new command preempts the running one (a quick brake first)" | `JETSON_COMMS.md:86` | `task_control_loop.cpp:398-402` calls `movement::start()` with no `abort()` between — no null-momentum phase |
 | `RPM_LOOP` default 1, `RPM_MAX` 4000, `MOT_SPIN_MIN` 0.10 | `PARAMETERS.md:105-109,135` | 0, 3600, 0.02 (`config.h:380,445,464`) |
 | ~~"constant distance comes from the Pico RPM closed loop (now enabled)"~~ **FIXED 2026-08-03** | `PARAMETERS.md`, `ALGORITHMS.md §11.1`, `ARCHITECTURE.md` | You were right, and it was worse than a wrong mechanism: `RPM_LOOP`, `THR_TRIM_EN` **and** `MOT_BAT_V_MAX` are all 0 at defaults, so **no** voltage compensation is active and a timed move really does travel further on a full pack. All three docs now say so and list the two supported routes. |
@@ -343,13 +345,13 @@ Happy to take any of the above as PRs against this repo instead of issues — sa
 
 # Round 6 reply — 2026-08-01, against `b213e50` / `SROT_FW_BEHAVIOUR_REV 2`
 
-Written after reading `FIRMWARE_CHANGELOG_FOR_DUBURI.md`, `AUDIT.md` R35–R45, and merging
-your PR into `duburi_ws`. **Nine of eleven answered, and the two that were not are the two
+Written after reading `FIRMWARE_CHANGELOG_FOR_ROS_WORKSPACE.md`, `AUDIT.md` R35–R45, and merging
+your PR into the ROS workspace. **Nine of eleven answered, and the two that were not are the two
 that should not have been.** §4 you correctly refused to fake, §11 you deferred by agreement.
 
 Both host-side workarounds are gone: `_brake_last_leg` removed (§2), `_ack_budget_s`
 demoted to a backstop (§1). Rate pinning is re-enabled, `move_back` un-refused,
-`/duburi/esc_rpm` built on 11030/11031.
+`/auv/esc_rpm` built on 11030/11031.
 
 ## Verified on our side
 
@@ -357,7 +359,7 @@ demoted to a backstop (§1). Rate pinning is re-enabled, `move_back` un-refused,
 
 - **The dialect trap is worse than "srot_fc didn't set it".** Measured here:
   pymavlink's default is `dialects.v10.ardupilotmega`, where `11030 not in mavlink_map`;
-  only v20 has it. It worked *by import order alone* — `duburi_control/__init__` reaches
+  only v20 has it. It worked *by import order alone* — `ros_control/__init__` reaches
   `pixhawk.py`, which sets `MAVLINK20` at line 44. Anything importing `fc.srot_fc` alone
   got MAVLink 1. Good catch, and it was found in-vehicle rather than by reading, which is
   the only way it could have been found.
@@ -372,7 +374,7 @@ Not criticism — they are ours to maintain, and your changelog is what surfaced
    `PH_HOLD = 6`, `PH_DONE = 7`. It never stuck a mission (the terminal ACK is the
    authority, exactly as your doc now says) which is precisely why it survived.
 2. **`STUNT` (100) / `PATTERN` (101) were missing from `MODE_NAMES`**, so they surfaced as
-   `UNKNOWN(100)` on `/duburi/state` — which reads like a comms fault rather than a real
+   `UNKNOWN(100)` on `/auv/state` — which reads like a comms fault rather than a real
    mode moving the hull. Added, but excluded from `mode_int()`: `DO_SET_MODE` cannot enter
    them, so accepting one would burn our 8 s poll and report a misleading
    "mode stayed STABILIZE".
@@ -455,7 +457,7 @@ vision API, though.
 The **ESP32-C3 + BNO085 USB board has been removed from the hull** — so your
 `auv-architecture-2026.md` inference was correct, and we can now confirm the half you said
 you could not see. `bringup.launch.py` no longer defaults `yaw_source:=dvl`; it defaults to
-`mavlink_ahrs`, which reads your fused `ATTITUDE`. `duburi_sensors` stays in the tree as a
+`mavlink_ahrs`, which reads your fused `ATTITUDE`. `ros_sensors` stays in the tree as a
 fallback but nothing selects it, so its 50 Hz reader thread and 5 s boot calibration stop
 costing the Orin anything.
 

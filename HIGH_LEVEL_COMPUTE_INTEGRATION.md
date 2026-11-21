@@ -1,7 +1,9 @@
-# Integrating Hengla (the SROT board) into `duburi_ws`
+# High-level Compute Integration — Hengla and a ROS 2 Workspace
+
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
 
 **Audience:** an agent or engineer who has never seen this board, tasked with modifying
-[`fh1m/duburi_ws`](https://github.com/fh1m/duburi_ws) to fly on this controller instead of a
+a ROS 2 workspace to fly on this controller instead of a
 Pixhawk/ArduSub.
 
 **Naming:** the *board* is **SROT**; the *firmware* is **Hengla**. `MAV_CMD_SROT_MOVE` keeps its
@@ -74,11 +76,11 @@ companion must assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affe
 - SROT is a **custom flight controller** (ESP32 + RP2350 co-processor) that already does attitude
   stabilisation, depth hold, thrust allocation for a vectored-6DOF frame, arming/failsafes, and
   **complete motion primitives with on-board braking**.
-- It speaks **MAVLink 2** over serial. `duburi_ws` already speaks MAVLink 2 via **pymavlink** — so
+- It speaks **MAVLink 2** over serial. A ROS workspace using **pymavlink** already has the transport tools — so
   this is a *transport-and-verbs* swap, not a rewrite.
 - The single custom verb, **`MAV_CMD_SROT_MOVE` (31000)**, has the exact shape of a ROS 2 action:
   immediate `IN_PROGRESS`, ~3 Hz progress 0..99, then **one of four terminal results**
-  (`ACCEPTED` / `CANCELLED` / `FAILED` / `DENIED`). It maps **1:1 onto `duburi_interfaces/Move`** —
+  (`ACCEPTED` / `CANCELLED` / `FAILED` / `DENIED`). It maps **1:1 onto `ros_interfaces/Move`** —
   including preemption, which the board now reports rather than leaving dangling.
 - Consequence: most of `motion_*.py` collapses into *"send one command, relay its progress"*, and
   several Python control loops delete entirely.
@@ -88,13 +90,13 @@ companion must assume. Full detail in [`AUDIT.md`](AUDIT.md); the ones that affe
 
 ## 1. Why this is a small change, structurally
 
-`duburi_ws` is unusually well-positioned for this:
+For a ROS workspace with the following structure, the migration is small:
 
 | Existing fact | Why it helps |
 |---|---|
-| No `mavros` — one node owns one `pymavlink` connection (`duburi_control/pixhawk.py`) | One file is the entire hardware boundary |
-| The whole control surface is one action, `/duburi/move` | Callers don't change when the backend does |
-| `duburi_sensors` already has a HAL pattern (`YawSource` factory + `sources/base.py`) | Copy it for `FlightController` |
+| No `mavros` — one node owns one `pymavlink` connection (`ros_control/pixhawk.py`) | One file is the entire hardware boundary |
+| The whole control surface is one action, `/auv/move` | Callers don't change when the backend does |
+| `ros_sensors` already has a HAL pattern (`YawSource` factory + `sources/base.py`) | Copy it for `FlightController` |
 | Same physical hardware (8× T200, vectored 6DOF, Bar30, BNO085) | No mechanical or mixer rework |
 
 The one structural gap: **there is no thrust/autopilot HAL.** `Pixhawk` is constructed directly and
@@ -104,23 +106,23 @@ its methods are called throughout `motion_*.py`. Creating that interface is step
 
 ## 2. What SROT replaces
 
-| `duburi_ws` component | Action | Why |
+| ROS workspace component | Action | Why |
 |---|---|---|
-| `duburi_control/pixhawk.py` | **Rewrite** → `srot.py` behind a HAL | Different verbs (see §4) |
-| `duburi_control/connection_config.py` | **Rewrite** | No Pixhawk USB IDs / BlueOS router; SROT is a direct serial or UDP endpoint |
-| `duburi_control/heading_lock.py` | **Delete** | SROT holds heading on-board, and every `SROT_MOVE` translate leg explicitly locks the heading it started with. The reason this existed — an untrusted in-hull compass — is solved differently: SROT's attitude is a BNO085 **game**-rotation vector, so the magnetometer is never fused and thruster current cannot move yaw. See the caveat below |
-| `duburi_control/motion_depth.py` (ALT_HOLD dance, prime phase, `SET_POSITION_TARGET_GLOBAL_INT`) | **Delete** | `SROT_MOVE` type 5 (dive) ramps the depth setpoint on-board at `MOVE_DEPTH_RATE` |
-| `duburi_control/motion_easing.py` | **Delete** | `MOVE_ACCEL` ramps and `MOVE_BRAKE_*` braking are on-board |
+| `ros_control/pixhawk.py` | **Rewrite** → `srot.py` behind a HAL | Different verbs (see §4) |
+| `ros_control/connection_config.py` | **Rewrite** | No Pixhawk USB IDs / BlueOS router; SROT is a direct serial or UDP endpoint |
+| `ros_control/heading_lock.py` | **Delete** | SROT holds heading on-board, and every `SROT_MOVE` translate leg explicitly locks the heading it started with. The reason this existed — an untrusted in-hull compass — is solved differently: SROT's attitude is a BNO085 **game**-rotation vector, so the magnetometer is never fused and thruster current cannot move yaw. See the caveat below |
+| `ros_control/motion_depth.py` (ALT_HOLD dance, prime phase, `SET_POSITION_TARGET_GLOBAL_INT`) | **Delete** | `SROT_MOVE` type 5 (dive) ramps the depth setpoint on-board at `MOVE_DEPTH_RATE` |
+| `ros_control/motion_easing.py` | **Delete** | `MOVE_ACCEL` ramps and `MOVE_BRAKE_*` braking are on-board |
 | `motion_{yaw,forward,lateral}.py` | **Collapse** | Each becomes one `SROT_MOVE` + progress relay |
-| `duburi_sensors` yaw fusion (`composite_bno_dvl`, `mavlink_ahrs`, `bno085`) | **Optional** | SROT publishes fused attitude in `ATTITUDE`. Keep the DVL for position/velocity; the BNO085-on-ESP32-C3 becomes redundant |
+| `ros_sensors` yaw fusion (`composite_bno_dvl`, `mavlink_ahrs`, `bno085`) | **Optional** | SROT publishes fused attitude in `ATTITUDE`. Keep the DVL for position/velocity; the BNO085-on-ESP32-C3 becomes redundant |
 | ArduSub mode machinery (`set_mode`, MANUAL→neutral→disarm) | **Delete** | Different mode numbers, and SROT disarms cleanly |
-| `duburi_vision` (all) | **Keep** | Unrelated |
-| `duburi_planner` (CLI, missions, YASMIN) | **Keep** | Unrelated |
-| `duburi_control/commands.py` (`COMMANDS` registry) | **Keep** | The verb table is backend-agnostic |
-| `duburi_interfaces/Move.action`, `DuburiState.msg` | **Keep** | See §5 |
-| `duburi_control/payload.py` | **Keep or migrate** | Currently a direct ESP32-over-USB link. SROT can drive the same payload via `DO_SET_SERVO`/`DO_SET_RELAY` on its PCA9685 — migrating removes a USB device |
+| `ros_vision` (all) | **Keep** | Unrelated |
+| `ros_planner` (CLI, missions, YASMIN) | **Keep** | Unrelated |
+| `ros_control/commands.py` (`COMMANDS` registry) | **Keep** | The verb table is backend-agnostic |
+| `ros_interfaces/Move.action`, `VehicleState.msg` | **Keep** | See §5 |
+| `ros_control/payload.py` | **Keep or migrate** | Currently a direct ESP32-over-USB link. SROT can drive the same payload via `DO_SET_SERVO`/`DO_SET_RELAY` on its PCA9685 — migrating removes a USB device |
 
-**Rule of thumb:** anything in `duburi_ws` that closes a loop on vehicle *attitude* or *depth* should
+**Rule of thumb:** anything in the ROS workspace that closes a loop on vehicle *attitude* or *depth* should
 be deleted. Anything that closes a loop on *perception* (vision servo, DVL distance) stays.
 
 ---
@@ -129,12 +131,12 @@ be deleted. Anything that closes a loop on *perception* (vision servo, DVL dista
 
 Do this before touching any `motion_*.py`, so both backends can coexist while you migrate.
 
-Copy the existing pattern from `duburi_sensors`:
+Copy the existing pattern from `ros_sensors`:
 - `sources/base.py` → an abstract base with the methods `motion_*.py` actually uses
 - `factory.py` → selects by a ROS param
 
 ```
-duburi_control/
+ros_control/
   fc/
     base.py       # FlightController ABC: connect, arm, disarm, set_mode, manual, move, telemetry
     pixhawk.py    # existing implementation, moved behind the ABC (keep working!)
@@ -142,7 +144,7 @@ duburi_control/
     factory.py    # make_fc(kind: str) -> FlightController
 ```
 
-Add a ROS param `flight_controller` (`pixhawk` | `srot`) on `duburi_manager`, defaulting to `pixhawk`
+Add a ROS param `flight_controller` (`pixhawk` | `srot`) on `ros_manager`, defaulting to `pixhawk`
 until SROT is pool-proven. This lets you A/B the two on the same vehicle.
 
 The ABC should expose **intent**, not channels — that is the whole point of the migration:
@@ -171,7 +173,7 @@ Same pymavlink, same MAVLink 2, `sysid 1 / compid 1` — but different verbs.
 `pixhawk.py` today writes 6 RC channels with `percent_to_pwm()` (−100..100 % → 1100..1900 µs,
 1500 neutral, `NO_OVERRIDE = 65535`). **SROT does not implement `RC_CHANNELS_OVERRIDE` at all.**
 
-| duburi_ws channel | const | SROT `MANUAL_CONTROL` field | Range |
+| the ROS workspace channel | const | SROT `MANUAL_CONTROL` field | Range |
 |---|---|---|---|
 | forward | `CH_FORWARD = 4` | `x` | **±1000** |
 | lateral | `CH_LATERAL = 5` | `y` | **±1000** |
@@ -204,7 +206,7 @@ Also note `MANUAL_CONTROL` is scaled by the **live pilot gain** (`GAIN`, 0.1..1.
 This is the **complete** `FlightMode` enum, not a selection. `HEARTBEAT.custom_mode` can carry any
 of these, so map exhaustively or your state publisher will hit an unknown value.
 
-| SROT `custom_mode` | Name | duburi_ws equivalent | Settable by `DO_SET_MODE`? |
+| SROT `custom_mode` | Name | the ROS workspace equivalent | Settable by `DO_SET_MODE`? |
 |---|---|---|---|
 | 0 | STABILIZE | `STABILIZE` | yes |
 | 1 | ACRO | `ACRO` | yes |
@@ -298,9 +300,9 @@ failure, and do not treat it as one of the four terminal results.
 
 ---
 
-## 5. Telemetry → `DuburiState`
+## 5. Telemetry → `VehicleState`
 
-| `DuburiState` field | SROT source | Note |
+| `VehicleState` field | SROT source | Note |
 |---|---|---|
 | `armed` | `HEARTBEAT.base_mode` | |
 | `mode` | `HEARTBEAT.custom_mode` | map via §4.2 |
@@ -308,10 +310,10 @@ failure, and do not treat it as one of the four terminal results.
 | `depth_m` | `VFR_HUD.alt` | **negated** (`alt = −depth`), or `SCALED_PRESSURE2` |
 | `battery_voltage` | `BATTERY_STATUS` id 0 | **id 0 is the electronics pack**; id 1 is the thruster pack (see below) |
 
-`/duburi/imu_rates` ← `ATTITUDE.{rollspeed,pitchspeed,yawspeed}` (rad/s) or `SCALED_IMU2`.
+`/auv/imu_rates` ← `ATTITUDE.{rollspeed,pitchspeed,yawspeed}` (rad/s) or `SCALED_IMU2`.
 
 **New capability:** `ESC_STATUS` at 5 Hz carries **real per-thruster RPM** (bidirectional DShot from
-Bluejay ESCs). `duburi_ws` has never had this. Two messages, `index` 0 and 4. Useful for a fouled-prop
+Bluejay ESCs). The ROS workspace has never had this. Two messages, `index` 0 and 4. Useful for a fouled-prop
 or dead-thruster health check — publish it as a new topic.
 
 ---
@@ -336,11 +338,11 @@ vision servoing · payload sequencing · logging.
 1. **HAL only.** Extract `FlightController`, move `Pixhawk` behind it, add the `flight_controller`
    param. *Checkpoint: existing missions still run identically on Pixhawk.*
 2. **`srot.py` connect + telemetry.** Implement connect/heartbeat/telemetry only.
-   *Checkpoint: `/duburi/state` populates from SROT; nothing actuates.*
+   *Checkpoint: `/auv/state` populates from SROT; nothing actuates.*
 3. **Arm / disarm / modes.** *Checkpoint: arm and disarm from the CLI, on the bench, props off.*
 4. **`manual()`.** Port the `MANUAL_CONTROL` mapping. *Checkpoint: teleop moves the vehicle correctly
    on every axis — verify against `docs/THRUSTER_MAP.md` before trusting any sign.*
-5. **`move()` + the ACK stream.** Wire `SROT_MOVE` into the `/duburi/move` action server for
+5. **`move()` + the ACK stream.** Wire `SROT_MOVE` into the `/auv/move` action server for
    forward/back/left/right/turn/dive/stop/hold, plus **arc** (p1 = 9) and **style** (p1 = 8), which
    earlier revisions of this list omitted. *Checkpoint: each verb runs and reports progress, and
    all four terminal results resolve the action — test preemption explicitly, it is the one that
@@ -431,7 +433,7 @@ and yaw-alignment messages named elsewhere in this document:
 
 ### The yaw reference, in detail — this one will affect your design
 
-`duburi_ws` grew `heading_lock.py` because the in-hull compass could not be trusted. SROT
+The ROS workspace grew `heading_lock.py` because the in-hull compass could not be trusted. SROT
 answers the same problem by keeping the magnetometer **out of the attitude fusion entirely**
 (`SH2_GAME_ROTATION_VECTOR`), so no amount of thruster current moves roll/pitch/yaw. The
 trade is that yaw has no earth reference.
@@ -460,7 +462,7 @@ The board's parameters survive a firmware upload but are wiped by a `PARAM_DEFAU
 (which has happened four times) or a chip erase. Bondor's **Parameters → Export** writes a
 `.params` file that includes the `CAL_*` sensor calibration — mag/accel/level trim and the
 detected motor directions — which lives in separate storage and is otherwise unrecoverable.
-Keep an exported file in the `duburi_ws` repo alongside the mission configs; a board that comes
+Keep an exported file in the ROS workspace repo alongside the mission configs; a board that comes
 up reporting `"Params reset to build defaults"` is flyable but *not* the vehicle you tuned.
 
 ---

@@ -1,4 +1,6 @@
-# Bench findings from `duburi_ws` — 2026-08-02, board in the AUV on our dev box
+# Bench findings from the ROS workspace — 2026-08-02, board in the AUV on our dev box
+
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
 
 **From:** the companion side. **Board:** `srot-control-board` @ `d386dc8`,
 `SROT_FW_BEHAVIOUR_REV 4`, read over USB serial at 115200.
@@ -125,7 +127,7 @@ and it is not.
 
 | Change | Where |
 |---|---|
-| `ros2 run duburi_manager connect` — new tool, opens the serial link and prints everything the board sends | `duburi_manager/srot_connect.py` |
+| `ros2 run ros_manager connect` — new tool, opens the serial link and prints everything the board sends | `ros_manager/srot_connect.py` |
 | `BATTERY_STATUS` de-multiplexed by instance id; `get_batteries()` added | `SrotFC.note_battery` |
 | Arm refused while the depth loop is saturated | `SrotFC.check_depth_loop_settled` |
 | Barometer variance check + disarmed depth-loop check in preflight | `bringup_check --srot` |

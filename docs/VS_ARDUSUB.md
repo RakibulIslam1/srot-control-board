@@ -1,166 +1,124 @@
-# Hengla vs ArduSub
+# Hengla vs ArduSub — Why We Choose SROT
 
-An honest comparison, written to help decide what to build next rather than to win an argument.
-ArduSub is a mature, widely-deployed autopilot with a decade of field use behind it; Hengla is a
-focused firmware for one specific vehicle. Each is better at different things, and the second
-half of this document matters as much as the first.
+**SROT with Hengla is our preferred solution for this project's autonomous AUV missions
+and piloted ROV operations.** Its design puts perception and mission decisions on the
+high-level compute, keeps real-time vehicle control on the board, and gives both the
+ROS workspace and the operator a direct interface to the same vehicle.
 
-Hengla runs on the **SROT** control board: an ESP32 flight core plus an RP2350 thruster
-co-processor. ArduSub runs on Pixhawk-class hardware, usually with a Raspberry Pi companion
-running BlueOS.
+The preference is about the complete SROT workflow: mission commands, control-core
+isolation, thruster feedback, operator tools and a focused mode set. The sections below
+explain the benefit of each choice and the capability available on the current `main`.
 
----
+## Autonomous missions: send a goal, receive a result
 
-## Where Hengla is genuinely better
+`MAV_CMD_SROT_MOVE` (31000) expresses forward/back, strafe, turn, dive, arc, hold, style
+and stop. Hengla owns the motion profile, attitude/depth control and braking, while
+the companion handles perception and mission sequencing. Progress arrives through
+`COMMAND_ACK IN_PROGRESS` and the command resolves with a terminal result.
+Rejections, cancellation and failures must be handled as well as success; see the
+[wire contract](../JETSON_COMMS.md).
 
-### 1. High-level motion primitives with an action-shaped contract
+This is the interface we want for a ROS 2 action client: mission code works with
+vehicle intent instead of implementing another attitude/depth controller on Linux.
+The companion must still supply a heartbeat at least once per second; the default
+link-loss failsafe is 5000 ms. A move does not bypass a failsafe.
 
-`MAV_CMD_SROT_MOVE` takes a verb — forward, back, strafe, turn, dive, arc, hold, style, stop —
-and returns an immediate `IN_PROGRESS`, ~3 Hz progress ACKs (0–99), and one terminal
-`ACCEPTED`/100. That is exactly the shape of a ROS 2 action, so a companion sends *intent* and
-relays a result.
+ArduSub also supports autonomous missions and companion commands through AUTO and
+GUIDED. SROT's specific advantage for this project is its dedicated motion-primitive
+contract and the clear board/compute division.
+[ArduSub mode documentation](https://ardupilot.org/sub/docs/modes.html).
 
-ArduSub has no equivalent. A companion wanting "go forward for 3 seconds" streams
-`RC_CHANNELS_OVERRIDE` at ~50 Hz for the duration and implements its own timing, ramping and
-stopping in Python. Every one of those messages is a chance for the link to hiccup mid-manoeuvre.
+## ROV operations: select the behaviour the job needs
 
-**Consequence:** on Hengla the vehicle keeps executing correctly if the companion stalls for a
-second; on ArduSub an RC-override gap is a loss of control. This is the single largest
-architectural difference.
+The everyday controls are direct: `STABILIZE` for attitude-assisted piloting,
+`DEPTH_HOLD` for depth-assisted work, `MANUAL` for direct output and `ACRO` for rate
+control. `AUTO` executes mission primitives and `SURFACE` handles ascent.
 
-### 2. Real per-thruster RPM, and things built on it
+The focused mode set is deliberate. The operator chooses the control behaviour
+needed for the task, while the ROS workspace combines primitives into richer missions.
+Service modes cover motor direction detection, autotune, motor tune and scripted
+manoeuvres. There are 11 enum entries in total; adding mode names is not the measure
+of mission capability. See the [complete mode table](../ARCHITECTURE.md).
 
-Bidirectional DShot with Bluejay-flashed ESCs gives **signed measured RPM for all 8 thrusters**,
-streamed as `ESC_STATUS`, with per-thruster stall detection ("Thruster 3 STALLED: dshot=1400
-rpm=0").
+## Position hold and navigation: a clear integration boundary
 
-ArduSub drives PWM ESCs entirely open-loop. It has **no feedback from a thruster at all** — a
-fouled prop, a dead ESC or a flooded motor is invisible to the autopilot and is inferred by the
-pilot from behaviour.
+The preferred SROT architecture keeps perception, localization and planning on the
+high-level compute, with fast control on the board. This gives the ROS workspace
+room to develop camera-, DVL- or other sensor-based navigation without moving the
+existing attitude/depth loops onto the companion.
 
-Built on top of that RPM: the slow thrust-normalisation trim (`THR_TRIM_EN`), which learns a
-bounded per-thruster gain so the same command produces the same thrust as the pack drains.
+**Current implementation:** Hengla holds attitude, heading and depth. It has no
+horizontal position/velocity estimator or position controller. `HOLD` commands zero
+translation with heading/depth hold; a timed forward leg uses a motion profile, not
+measured horizontal displacement. Neither guarantees station keeping in a current.
+Closed-loop horizontal position hold needs an implemented, validated feedback path.
+The [vision interface](../VISION_API.md) is a specification, not a shipped controller.
 
-### 3. On-board braking, so timed moves repeat
+ArduSub's POSHOLD and navigation modes require appropriate position/depth inputs.
+They are distinct from Hengla's current depth/heading hold.
+[ArduSub mode requirements](https://ardupilot.org/sub/docs/modes.html).
 
-A translate leg cruises, then actively **brakes** with reverse thrust scaled to the cruise
-speed (`MOVE_BRAKE_GAIN`, `MOVE_BRAKE_K`) before reporting complete. ArduSub coasts to a stop on
-drag, and how far it coasts depends on speed, trim and current.
+## Thruster feedback: make propulsion observable
 
-Combined with the voltage feedforward, "20% for 5 s" is intended to travel the same distance on
-a full or a flat pack. (Both `THR_TRIM_EN` and `MOT_BAT_V_MAX` ship **off** — enable them in
-water; see `PARAMETERS.md`.)
+The RP2350 drives eight Bluejay-flashed ESCs through bidirectional DShot and returns
+per-thruster RPM and fault information. Hengla exposes RPM to Bondor and the ROS
+workspace, including the companion-compatible `ESC_TELEMETRY_1_TO_4` and
+`ESC_TELEMETRY_5_TO_8` messages.
 
-### 4. Dual-MCU split keeps the flight loop clean
+For SROT, this is an integrated propulsion path: configuration, feedback, fault
+reporting and operator display are developed together. ArduPilot also supports DShot,
+ESC telemetry and bidirectional DShot on supported hardware, so the benefit here is
+SROT's integrated implementation rather than exclusive protocol support.
+[ArduPilot DShot documentation](https://ardupilot.org/sub/docs/common-dshot-escs.html).
 
-DShot generation and RPM decoding live on the RP2350's PIO. The ESP32's 500 Hz control loop
-never touches bit-timing, and comms work sits on the other core. An ArduSub board generates its
-outputs from the same MCU that runs everything else.
+`RPM_LOOP` ships off because a fast RPM setpoint loop is unsuitable for the current
+stabilization path. Slow thrust trim and battery feedforward are optional,
+default-off features requiring water validation; RPM is not a direct thrust sensor.
+See [ALGORITHMS.md](../ALGORITHMS.md) and [PARAMETERS.md](../PARAMETERS.md).
 
-### 5. IMU loss degrades instead of disarming
+## Motion profiles and braking: keep execution on the board
 
-Lose attitude mid-dive and Hengla warns, zeroes the stale rates, holds the last-good attitude
-and **stays armed** — for a submarine, cutting the thrusters mid-water is usually worse than
-flying on slightly stale data. It also self-heals the BNO085 (re-issues reports, then re-opens
-the SH-2 session).
+Timed translation ramps its demand and applies reverse thrust before finishing.
+The board owns that timing at the control-loop rate, so Python mission code does
+not need to reproduce the ramp and brake sequence.
 
-ArduSub's EKF failsafe is more conservative, which is the right call for a vehicle that can fall
-out of the sky and the wrong one for a neutrally-buoyant vehicle.
+This provides a useful execution contract for repeatable mission development.
+Travel distance still depends on calibration, battery, load and water conditions;
+braking is not measured position control. Test compensation features before relying
+on them for a particular vehicle.
 
-### 6. On-board autotune, including the thrusters
+## Control architecture: give real-time work its own resources
 
-A relay autotune walks the whole cascade (rate roll/pitch/yaw → angle P → depth PID) in about a
-minute, safety-monitored, and a separate `MOTOR_TUNE` characterises each thruster individually.
-ArduSub has no autotune for a sub.
+Core 1 runs the ESP32 sensing/control/output tasks at 500 Hz. Core 0 handles
+communications and UI, and the RP2350 handles DShot timing and RPM decoding.
+The BNO085 supplies fused attitude; the Bar30 supplies depth.
 
-### 7. Integrated LoRa black-box downlink
+This split is why we choose SROT for this vehicle: communications, perception and
+ESC bit timing have explicit owners outside the attitude/depth controller.
+Core separation is an architectural benefit; a comparative latency, jitter or
+accuracy claim would need measurements on both complete systems.
 
-A 39-byte CRC-checked frame at ~4 Hz to a second ESP32 that re-emits MAVLink over USB — so
-telemetry survives a tether failure with no extra hardware stack. On ArduSub this is a
-companion-side integration job.
+## Operator tools, tuning and records
 
-### 8. Comprehensible
+Bondor is the primary operator/configuration interface, supported by the separate
+LoRa bridge and ESC-flasher repositories. On-board relay autotune and motor tune
+serve this hardware directly. Mission logic and payload orchestration can evolve
+in the ROS workspace without adding a scripting runtime to the flight controller.
 
-~10k lines you can read in an afternoon, versus ArduPilot's ~700k. When something misbehaves you
-can find it. This audit is the demonstration: nine real defects located by reading the code.
+Bondor provides live charts and CSV recording; the firmware also writes selected
+flight data to SD at approximately 20 Hz. Full-rate controller replay and expanded
+diagnostics remain development work. The hardware currently uses one BNO085 and
+one Bar30; software cannot create sensor redundancy that is absent from the board.
 
----
+## Safety and validation
 
-## Where ArduSub is clearly ahead
+Safety-monitor disarm takes precedence over failsafe SURFACE, mode execution,
+motor-test override and mixing. Leak, low-battery and link-loss handling belong on
+the board, alongside input freshness checks and command-result reporting.
+The [audit](../AUDIT.md) records fixes and deferred issues; the
+[roadmap](../ROADMAP.md) records the remaining implementation and water checks.
 
-This section is not a formality. If a mission needs anything below, ArduSub (or a companion
-doing the heavy lifting) is the right answer.
-
-### 1. No state estimator
-
-ArduSub runs **EKF3**: a full 24-state filter fusing IMU, baro, compass, GPS, DVL, optical flow
-and range finders, with innovation-based fault detection and lane switching between multiple
-IMUs.
-
-Hengla has **no estimator at all**. It consumes the BNO085's internal fusion for attitude and
-reads depth straight from the Bar30. There is no velocity estimate, no position estimate, and no
-mechanism for detecting that a sensor has gone quietly wrong (as opposed to silent, which *is*
-detected).
-
-### 2. No position control or real navigation
-
-ArduSub has `GUIDED`, `AUTO`, `POSHOLD`, `CIRCLE`, waypoint missions with `WPNAV_*` tuning, and
-DVL/GPS-driven station keeping.
-
-Hengla's `AUTO` executes **one timed primitive at a time**, dead-reckoned, with no queue.
-"Return to the start" is not something it can do. `MISSION_*` upload is handled but minimal.
-Anything positional must live on the Jetson.
-
-### 3. No logging for post-dive analysis
-
-ArduSub writes structured dataflash logs at loop rate — every setpoint, every PID term, every
-sensor — and the whole ecosystem (`MAVExplorer`, `plotjuggler`, Flight Review) exists to read
-them. It is how real tuning problems get diagnosed.
-
-Hengla has Bondor's live charts and CSV recording, which is a GCS-rate sample of selected
-signals. **This is the biggest practical gap in the firmware** and is item ④ on the roadmap.
-
-### 4. No sensor redundancy
-
-ArduSub supports multiple IMUs, multiple baros and multiple compasses with voting and failover.
-Hengla has one BNO085 and one Bar30 — a single failure of either is a single point of failure,
-mitigated only by degrading gracefully.
-
-### 5. No scripting
-
-ArduSub embeds Lua for mission logic, custom failsafes and payload sequencing without a firmware
-rebuild. Every behaviour change here is a recompile.
-
-### 6. Field testing
-
-ArduSub has years of use across thousands of vehicles, with the bug reports and edge cases that
-implies. Hengla is new, has had nine defects found in one audit pass, and several features
-(`THR_TRIM_EN`, `MOT_BAT_V_MAX`, `MAG_YAW_REF`, `TRIM_EN`) are **default-off and not yet
-validated in water**. Treat every wet test as a test.
-
-### 7. Ecosystem
-
-QGroundControl's full ArduSub UI, BlueOS's Vehicle Setup pages, parameter metadata with
-descriptions and ranges, mature firmware upload tooling. Hengla reports
-`MAV_AUTOPILOT_GENERIC`, so those ArduPilot-gated pages stay empty by design — Bondor covers the
-same ground for this vehicle, but it is one app, not an ecosystem. See `docs/BLUEOS.md`.
-
----
-
-## Choosing
-
-| If you need… | Use |
-|---|---|
-| Companion-driven high-level moves with reliable progress/result | **Hengla** |
-| Thruster health, RPM feedback, stall detection | **Hengla** |
-| Repeatable timed distances as the pack drains | **Hengla** |
-| Waypoint navigation, position hold, DVL/GPS fusion | **ArduSub** |
-| Post-dive log analysis for tuning | **ArduSub** |
-| Redundant sensors for a vehicle you cannot afford to lose | **ArduSub** |
-| A codebase you can fully understand and modify | **Hengla** |
-
-The honest summary: Hengla is better at **being commanded** and at **knowing what its thrusters
-are doing**. ArduSub is better at **knowing where it is** and at **surviving things going
-wrong**. For an AUV whose intelligence lives on a Jetson, that trade is a reasonable one — the
-companion supplies the estimation and planning that Hengla lacks, and gets a much better
-actuation interface in return.
+These choices make SROT the platform we choose to develop across autonomous and
+ROV tasks. Position hold, redundancy and field reliability must be assessed from
+implemented hardware, feedback and testing; the architectural preference does not
+turn planned capabilities into completed ones.

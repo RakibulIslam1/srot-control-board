@@ -146,7 +146,7 @@ static const Desc SCALARS[] = {
     // backwards WITHOUT breaking the mixer patterns the way a non-uniform motor flip does.
     { "FRAME_REVERSE",  "FRAME_REVERSE",  &g_params.frame_reverse,  DEF_FRAME_REVERSE },
     // Which source's liveness the GCS failsafe tracks, on top of "any station is alive".
-    // 255/191 = MAV_COMP_ID_ONBOARD_COMPUTER, the Jetson (duburi_ws shipped 191 in 41318e7).
+    // 255/191 = MAV_COMP_ID_ONBOARD_COMPUTER, the Jetson (the ROS workspace shipped 191 in 41318e7).
     // Either field 0 = wildcard = the pre-2026-08-02 "any non-self heartbeat" behaviour.
     { "FS_GCS_SYSID",   "FS_GCS_SYSID",   &g_params.fs_gcs_sysid,   255.0f },
     { "FS_GCS_COMPID",  "FS_GCS_COMPID",  &g_params.fs_gcs_compid,  191.0f },

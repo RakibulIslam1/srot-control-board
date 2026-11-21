@@ -1,7 +1,7 @@
 # AGENTS.md — srot-control-board (firmware "Hengla")
 
 Instructions for AI agents and developers working in this repo. A matching file exists in each
-sibling repo; the **Shared invariants** section below is deliberately identical in all of them.
+sibling repo; the **Shared invariants** below preserve the same protocol guarantees.
 
 ---
 
@@ -19,7 +19,7 @@ already gone wrong — read it before assuming a piece of oddly-shaped code is a
 
 ```
 Jetson Orin Nano  ──USB serial 115200──  SROT board  ──1 Mbaud UART──  RP2350 Pico ── 8× ESC
-  (duburi_ws:                              (this repo)                   (thruster/RPM)
+  (ROS workspace:                         (this repo)                   (thruster/RPM)
    ROS 2, YOLO11,
    missions, payload)                          │
                                                └── LoRa ── Bondor GCS (srot-ground-station)
@@ -37,7 +37,7 @@ specified but not yet implemented.
 | File | What it is |
 |---|---|
 | `JETSON_COMMS.md` | the wire protocol the companion codes against — **treat as a contract** |
-| `DUBURI_WS_INTEGRATION.md` | the companion-side migration guide |
+| `HIGH_LEVEL_COMPUTE_INTEGRATION.md` | the companion-side migration guide |
 | `JETSON_FEEDBACK.md` | findings sent **to us** by the companion team, ranked by what blocks them |
 | `VISION_API.md` | the vision-guided control spec (not yet implemented) |
 | `AUDIT.md` | three rounds of defect findings + what is deferred and why |
@@ -45,7 +45,7 @@ specified but not yet implemented.
 
 ---
 
-## Shared invariants (identical in every repo's AGENTS.md)
+## Shared invariants (co-owned protocol guarantees)
 
 These are **co-owned across repos**. Changing one unilaterally breaks a partner silently — no
 exception is raised, the vehicle just behaves wrong.
@@ -54,7 +54,7 @@ exception is raised, the vehicle just behaves wrong.
    `MAV_CMD_SROT_MOVE = 31000`; the `SROT_MOVE` p1 type codes and their ordering; the
    `FlightMode` integers; `PCA_RELAY_BASE_CH = 8`; `MAVLINK_BAUD = 115200`;
    `GCS_FAILSAFE_MS = 5000`.
-   `duburi_ws` mirrors all of these in `fc/srot_protocol.py` and has a test
+   the ROS workspace mirrors all of these in `fc/srot_protocol.py` and has a test
    (`test_srot_protocol_drift.py`) that **reads this repo's headers directly** and fails on
    divergence. That test is the safety net — do not defeat it, and do expect it to catch you.
 
@@ -140,13 +140,13 @@ keeps producing.
 | `srot-ground-station` | the LoRa bridge **and Bondor** |
 | `srot-esc-flasher` | the 4-way ESC tool |
 
-**We NEVER commit to `duburi_ws`.** Not to `main`, not to `srot`, not "just a doc fix".
+**We NEVER commit to the ROS workspace.** Not to `main`, not to `srot`, not "just a doc fix".
 Every change we need on the companion side goes in as a **pull request** against their
 branch, and they decide. That includes the mirrored constants in `fc/srot_protocol.py`
 even though we are the source of truth for the values — being the authority on a number
 is not the same as having write access to their tree.
 
-**And the reverse.** If `duburi_ws` needs something changed in the firmware, in Bondor or
+**And the reverse.** If the ROS workspace needs something changed in the firmware, in Bondor or
 in the ESC flasher, they open a **pull request here**. They should not push directly, and
 we should not ask them to.
 
@@ -165,5 +165,10 @@ and say plainly in the PR what you could **not** verify from your side.
 
 1. Say so explicitly in the commit message, naming the other repo.
 2. Update `JETSON_COMMS.md` — it is the contract the companion codes against.
-3. Expect `duburi_ws`'s drift test to fail until its mirror is updated; that is the design.
+3. Expect the ROS workspace's drift test to fail until its mirror is updated; that is the design.
 4. If it changes a parameter's meaning or units, note whether existing tuning survives.
+
+## Commit attribution
+
+Use the configured human author/committer identity. Do not add AI assistants as
+commit co-authors or repository contributors. Preserve human contributors' credit.

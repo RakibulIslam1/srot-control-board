@@ -1,6 +1,6 @@
 # VISION_API — vision-guided control on Hengla
 
-**Status:** specification, not yet implemented. Written by the `duburi_ws` (Mongla) companion
+**Status:** specification, not yet implemented. Written by the ROS workspace (ROS 2) companion
 side against firmware **`9384e6b`**, which is the build currently flashed. Every firmware
 claim below carries a `file:line` so you can verify rather than trust.
 
@@ -100,8 +100,8 @@ Consequences that matter to you:
 - A bearing is directly comparable to a yaw error in radians, so the vision yaw term and the
   existing heading loop speak the same language.
 
-We will publish the FOV we use in `duburi_ws`'s camera config and state it in
-`.claude/context/vision-control-split.md`. Treat FOV as **our** responsibility; you never need
+We will publish the FOV we use in the ROS workspace's camera config and state it in
+the workspace's vision-control notes. Treat FOV as **our** responsibility; you never need
 image dimensions.
 
 ### 1.2 Timestamps — do not trust `time_usec`
@@ -295,7 +295,7 @@ clamp its own target to a sane band ≥ 0 — see [`JETSON_FEEDBACK.md`](JETSON_
 > ⛔ **The depth loop has never run closed.** The sign was inverted until 2026-07-30 and the
 > Bar30 was not fitted while it was written (`AUDIT.md:35-73`). The vision depth axis sits
 > *downstream* of it. Ship the vision yaw/lateral axes first and gate the depth axis behind
-> the two bench checks in `DUBURI_WS_INTEGRATION.md:295-301`.
+> the two bench checks in `HIGH_LEVEL_COMPUTE_INTEGRATION.md:295-301`.
 
 ### 4.3 The forward/standoff axis is ONE-SIDED
 
@@ -533,7 +533,7 @@ the 500 Hz side.
   angles, and **stop publishing when there is no target** (no stale repeats).
 - Keep selection, tracking, coast, class switching and fire gating on our side.
 - Keep our timeout ladder consistent with yours and documented in
-  `.claude/context/vision-control-split.md`.
+  the workspace's vision-control notes.
 - Maintain `test_srot_protocol_drift.py`, which reads **your headers directly** and fails if
   the wire constants, mode ints or `movement::Type` ordering ever diverge from our copy. When
   you add `VISION`, that test is what tells us.

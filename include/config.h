@@ -295,7 +295,7 @@
 //            enforces it (task_ui_status.cpp, mav_commands.cpp DO_SET_SERVO).
 //   FUNCTION decides what a companion/GCS CALLS it. The firmware deliberately
 //            does NOT read servo_func -- it is storage, served by the ordinary
-//            param protocol, for duburi_ws to read and Bondor to write.
+//            param protocol, for the ROS workspace to read and Bondor to write.
 // Setting a FUNCTION never makes a channel fireable; only ROLE=PCA_SWITCH does.
 //
 // WHY THIS LIVES ON THE BOARD. The alternative is a host-side table mapping
@@ -304,7 +304,7 @@
 // manipulator arm during a drop. Stored here, the identity travels with the hull.
 //
 // ⚠ APPEND-ONLY, for the same reason movement::Type is: these numbers are mirrored
-// by hand in duburi_ws (fc/srot_protocol.py) and Bondor (src/shared/protocol.ts).
+// by hand in the ROS workspace (fc/srot_protocol.py) and Bondor (src/shared/protocol.ts).
 // Inserting a value silently renames every payload after it. 0 must stay NONE so an
 // unconfigured board (param default 0.0f) reads "unassigned" rather than a device.
 #define SROT_SERVO_FUNC_NONE      0   // unassigned / not a payload
@@ -686,7 +686,7 @@
 // FIRMWARE BEHAVIOUR REVISION — the cross-repo coordination signal
 // -----------------------------------------------------------------------------
 // INCREMENT whenever a change alters OBSERVABLE BEHAVIOUR that a partner repo has
-// written a workaround for. This is what `duburi_ws` should assert on.
+// written a workaround for. This is what the ROS workspace should assert on.
 //
 // Why this exists: their `test_srot_protocol_drift.py` detects our fixes by pattern-matching
 // our C++ source — e.g. it greps the `Type::STOP` case for `abort()` to decide whether
@@ -741,7 +741,7 @@
 //      Peak-to-peak > 15 mbar over an 8-sample window now marks the baro unhealthy, which
 //      suppresses WTEMP/SCALED_PRESSURE2 and refuses DEPTH_HOLD/AUTO. Published as BARO_P2P
 //      (ungated, so it can explain WHY depth withdrew). Finding and fix requested by
-//      duburi_ws -- BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md.
+//      the ROS workspace -- BENCH_FINDINGS_FROM_ROS_WORKSPACE_2026-08-02.md.
 //   6  2026-08-06. MOTOR_DETECT NOW CONVERGES, AND CANNOT WIPE A GOOD CALIBRATION.
 //      Two faults, both found on the 4.5 hull after an in-water session where every axis
 //      was reversed and STABILIZE flipped. (a) The detect pulse is driven THROUGH in.dir[],
@@ -754,20 +754,20 @@
 //      air — where 0.30 throttle never crosses the 0.05 rad/s gate — silently reset all
 //      eight thrusters to +1, reported SUCCESS and was persisted to flash. It now leaves
 //      the stored value untouched and finishes FAIL, which also keeps persist_pending
-//      clear so a failed detect can never reach flash. Reported by duburi_ws.
+//      clear so a failed detect can never reach flash. Reported by the ROS workspace.
 // Rev 8: DEPTH_ERR / DEPTH_OUT are SUPPRESSED when the depth controller is not running,
-// instead of streaming a frozen register. Consumers that gate on them (duburi_ws refuses to
+// instead of streaming a frozen register. Consumers that gate on them (the ROS workspace refuses to
 // arm while |DEPTH_OUT| >= 0.90) must treat absence as "loop not running", not as zero.
 // Also adds the repeating CFG config banner and the FS_GCS_COMPID=0 wildcard warning.
 //
-// Bumped per duburi_ws Round 8 §8.3: bump when a vehicle in service will FEEL the change,
+// Bumped per the ROS workspace Round 8 §8.3: bump when a vehicle in service will FEEL the change,
 // even if the code is additive. Suppressing a field is felt.
 //
 // Rev 9: publishes YAW_REF (yaw_ref::State) so a consumer can tell an ABSOLUTE heading from
 // a boot-relative one and gate absolute MOVE_TURN on it (Round 8 §8.8). MAGACC is not a
 // proxy for this and must not be used as one.
 //
-// Rev 8 is a separate number even though it NEVER REACHED HARDWARE -- duburi_ws already
+// Rev 8 is a separate number even though it NEVER REACHED HARDWARE -- the ROS workspace already
 // adopted "rev 8" in their docs as the DEPTH_ERR/DEPTH_OUT suppression release, and quietly
 // widening what that number means is the precise failure §8.3 was written about.
 // Rev 10: YAW SENSE IS CORRECTED. BNO_SWAP_ROLL_PITCH was an improper transform (swap x/y,
@@ -793,7 +793,7 @@
 // Rev 13: SROT_MOVE REQUIRES ARMED. The movement state machine never consulted the arm
 // state, so a move sent while disarmed ran its whole profile with the thrusters silent and
 // finished MAV_RESULT_ACCEPTED at 100%. Measured: a 3 m FORWARD "completed" in 3.5 s having
-// moved nothing. Consumers that sequence legs on those ACKs (duburi_ws) would advance an
+// moved nothing. Consumers that sequence legs on those ACKs (the ROS workspace) would advance an
 // entire mission on a dead hull. Now MAV_RESULT_TEMPORARILY_REJECTED + "arm first".
 //
 // Also adds per-axis ATC_RAT_*_FLTD and the previously absent ATC_RAT_*_FLTT target filter.

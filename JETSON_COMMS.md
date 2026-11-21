@@ -1,13 +1,20 @@
 # JETSON ↔ AUV Communications Reference (SROT)
 
-The complete contract the Jetson ("Mongla" ROS2 workspace, `duburi_ws`) uses to command the SROT
+**Integration naming:** A ROS workspace on the high-level compute is the companion
+client. The general setup guide is [High-level Compute Integration](HIGH_LEVEL_COMPUTE_INTEGRATION.md).
+Document/package examples were generalized; command IDs, mode IDs, units, baud,
+freshness rules and parameter semantics are unchanged. Existing tuning survives.
+
+The complete contract the high-level compute (ROS 2 workspace) uses to command the SROT
 flight controller (ESP32). Everything is **MAVLink 2**; nothing here needs a custom dialect — the
 one custom verb (`SROT_MOVE`) rides inside a standard `COMMAND_LONG`.
 
-The design goal: the Jetson sends **high-level intent** ("go forward 3 s at 50 %", "turn to 90°",
-"dive to 2 m") and the ESP32 owns the **motion primitive** — RPM-held cruise (voltage-independent),
-**on-board braking** (no coast/drift), heading + depth hold, smooth ramps, and safety. The Jetson
-never runs a per-axis loop and never sends a brake.
+The design goal: the high-level compute sends **intent** ("go forward 3 s at 50 %", "turn to 90°",
+"dive to 2 m") and the ESP32 owns the **motion primitive** — timed translation, on-board
+braking, heading/depth hold, smooth ramps and safety. RPM is feedback at the default settings;
+the fast RPM loop and optional thrust/voltage compensation ship off. Timed motion does not
+measure distance or hold horizontal position. See `ALGORITHMS.md` §11.1.
+The companion does not duplicate the attitude/depth loops or the primitive's brake sequence.
 
 ---
 

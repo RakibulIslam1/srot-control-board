@@ -1,7 +1,7 @@
 # SROT — Architecture, Control Loop & Tuning
 
 How SROT is built and how it flies. Firmware architecture, the full control loop, flight
-modes, the MAVLink/QGC/BlueOS interface, and the tuning & calibration playbook. Hardware
+modes, the MAVLink/ROS workspace/Bondor interface, and the tuning & calibration playbook. Hardware
 wiring is in `HARDWARE.md`; parameters in `PARAMETERS.md`; status/roadmap in `ROADMAP.md`.
 
 ---
@@ -17,7 +17,7 @@ flight core** (nothing else runs there); **Core 0 handles comms + UI**. One glob
 | `Task_SensorRead` | 1 | 6 | 500 Hz | BNO085 + Bar30 + ADC → `SensorState` |
 | `Task_ControlLoop` | 1 | 5 | 500 Hz | modes → cascade PID → mixer → `ThrusterState` |
 | `Task_DShot_RMT` | 1 | 5 | 500 Hz | thruster output (RMT DShot, or Pico link) |
-| `Task_MAVLink` | 0 | 2 | 100 Hz | QGC/BlueOS RX/TX, params, deferred flash |
+| `Task_MAVLink` | 0 | 2 | 100 Hz | MAVLink RX/TX, params, deferred flash |
 | `Task_UI_Status` | 0 | 1 | 30 Hz | OLED (+ "Booting SROT" splash) + PCA9685 aux + RGB |
 | `Task_Buzzer` | 0 | 1 | 200 Hz | buzzer melodies/alerts (uniform timing); self-detects events, gated by `BUZZ_MASK` |
 | `Task_LoRa_SD` | 0 | 1 | 20 Hz | LoRa mission RX + SD log + ESP-NOW |
@@ -47,10 +47,10 @@ Loop period = **2 ms (500 Hz)** — the fastest whole-ms rate on the 1 kHz FreeR
   Task_ControlLoop  (dt = 0.002 s)
     readInputs()   snapshot sticks/attitude/rates/depth/mode (short locks, zero-init)
     calibration::update()            (advances any active cal routine)
+    arming / safety-monitor checks   (disarm takes precedence)
     failsafe check                   (leak / low-batt / GCS-loss → SURFACE)
-    arming enforcement               (lost prerequisite → disarm)
-    motor-test override?  yes → drive one motor raw, skip the mixer
     mode dispatch → 6 body demands (roll,pitch,yaw,throttle,forward,lateral)
+    motor-test override?  yes → drive one motor raw, skip the mixer
     mixer::mix()   6 demands → 8 normalized outputs (vectored-6DOF, uniform saturation)
     mixer::toDshot() thrust-shape + per-motor direction → DShot values
         │ publish → g_state.thrusters
@@ -89,8 +89,9 @@ inner (rate):   torque       = PID(desired_rate, gyro) + ATC_RAT_*_FF · desired
   `ATC_RAT_*_IMAX`, output clamp ±1; wrap guards NaN.
 
 ### Flight modes & on-arm behaviour
-On arm with centred sticks, **all thrusters sit at DShot neutral (1048) = stopped** — no
-creep. What it actively does depends on the mode:
+Zero mixer demand maps to DShot neutral (1048) with the default zero idle. Stabilized
+modes may apply corrective thrust as soon as they are armed; automatic and service
+modes can command motion. Choose the mode before arming:
 
 | Mode (custom_mode) | Attitude | Depth | Hands-off behaviour |
 |---|---|---|---|
@@ -100,11 +101,20 @@ creep. What it actively does depends on the mode:
 | DEPTH_HOLD / "Alt Hold" (2) | level + heading | **holds captured depth** | Holds attitude **and** the depth it was at on entry |
 | SURFACE (9, failsafe) | level + heading | → 0 m | Ascends to the surface |
 | MOTOR_DETECT (20) | — | — | Pulses each thruster to detect direction |
-| STUNT/PATTERN (100/101) | scripted | scripted | Cmd-triggered rotations/sequences |
+| AUTOTUNE (21) | relay excitation | optional tune phase | Safety-monitored control-loop tuning |
+| MOTOR_TUNE (22) | tuning routine | monitored | Per-thruster characterization/tuning |
+| AUTO (23) | heading + commanded motion | held/ramped target | Executes one SROT_MOVE primitive at a time |
+| STUNT/PATTERN (100/101) | scripted | mode-dependent | Cmd-triggered rotations/sequences |
 
 Entering **Depth Hold** captures the *current* depth as target (it doesn't dive to a
 preset); the throttle stick slews the target and re-locks on release. **No mode holds
 horizontal position** (no GPS/DVL/flow fusion yet) — current can drift the sub sideways.
+
+The focused mode set covers everyday piloting, mission execution and service work.
+Richer mission sequences belong in the ROS workspace. DEPTH_HOLD, AUTO and PATTERN
+require healthy, fresh depth data; refusal falls back to STABILIZE and reports
+`Depth refused: baro jitter ... mbar`, `Depth refused: baro read failures` or
+`Depth refused: baro not initialised`. SURFACE retains an open-loop ascent fallback.
 
 ### The mixer & thrust shaping — `control/mixer.cpp`
 Six body demands → 8 thrusters via a fixed **SUB_FRAME_VECTORED_6DOF** matrix (M1-4
@@ -132,31 +142,34 @@ auto-disarm; deferred NVS writes on Core 0; stack high-water for all six tasks a
 
 ---
 
-## 3. MAVLink / QGC / BlueOS / companion
+## 3. MAVLink / high-level compute / Bondor
 
-SROT presents as **ArduSub 4.1.0** (heartbeat `SUBMARINE`+`ARDUPILOTMEGA`, `AUTOPILOT_VERSION`
-= 4.1.0). This makes **QGC and BlueOS treat it as a Sub** (Motor Test tab, sensor-cal UI, live
-Tuning page, per-thruster `ESC_STATUS`). ~90 ArduSub-standard params are provided as inert
-compat dummies so QGC's plugin is happy; the real tuning params use the standard `ATC_*`
-names so QGC's Tuning page edits them live (see `PARAMETERS.md`).
+Hengla reports `MAV_TYPE_SUBMARINE` + `MAV_AUTOPILOT_GENERIC`. It is a custom
+autopilot with its own version and command contract. Bondor is the primary
+configuration and operator interface; ArduPilot-gated setup pages in QGC/BlueOS
+are not the supported configuration path. See [docs/BLUEOS.md](docs/BLUEOS.md).
 
-- **Flight modes** use ArduSub custom_mode numbers (STABILIZE 0, ACRO 1, DEPTH_HOLD 2,
-  SURFACE 9, MANUAL 19, MOTOR_DETECT 20). Unsupported ArduSub modes → `DENIED`.
-- **Teleop** (works now): `MANUAL_CONTROL` (x/y/z/r + buttons) — the joystick path.
-- **Being GCS-agnostic:** MAVLink is open — QGC is just one client. Under BlueOS on a Pi,
-  the same link routes to any client (pymavlink/MAVSDK/mavros) over the network — e.g. a
-  Jetson. **Autonomy** (GUIDED + `SET_POSITION_TARGET_LOCAL_NED` / `SET_ATTITUDE_TARGET`) is
-  the Phase-2c roadmap item.
-- **Persistence:** NVS (`Preferences`) — params in `srot_prm`, calibration in `srot_cal`.
-  Params auto-save on change; calibration auto-saves on completion (deferred to Core 0).
+- **Transport:** the high-level compute connects directly to the board over USB
+  serial, MAVLink 2 at 115200 baud, sysid/compid 1/1.
+- **Teleoperation:** `MANUAL_CONTROL` supplies pilot axes and buttons.
+- **Autonomy:** `MAV_CMD_SROT_MOVE` (31000) enters AUTO (23) for on-board primitives
+  with progress and terminal results. This is distinct from an ArduSub GUIDED
+  position-target interface; horizontal navigation/position hold is not implemented.
+- **Mode IDs:** existing mode integers remain fixed for companion compatibility.
+  The additional service and mission modes are listed above.
+- **Persistence:** NVS (`Preferences`), parameters in `srot_prm` and calibration in
+  `srot_cal`. Saves run on Core 0, outside the real-time control path.
+
+Start with [High-level Compute Integration](HIGH_LEVEL_COMPUTE_INTEGRATION.md);
+[JETSON_COMMS.md](JETSON_COMMS.md) remains the authoritative wire contract.
 
 ---
 
 ## 4. Tuning & calibration
 
-### A. Calibration playbook (run in order on a fresh vehicle; all triggerable from QGC)
+### A. Calibration playbook (fresh vehicle; use the MAVLink commands through Bondor/a client)
 1. **Gyro** — hold still; `PREFLIGHT_CALIBRATION p1=1` → `gyro_off`.
-2. **6-point accel** — 6 orientations (QGC prompts); `p5=1` → `accel_off/scale`.
+2. **6-point accel** — 6 orientations (follow the calibration prompts); `p5=1` → `accel_off/scale`.
 3. **Compass** — figure-8; `DO_START_MAG_CAL` (mag is off in normal ops, so this is optional).
 4. **Baro/depth-zero** — at surface; `p3=1` → `baro_zero`.
 5. **Motor-direction detect** (mode 20 or `DO_MOTOR_TEST`) — store per-motor sign → `motor_dir[8]`.
@@ -192,19 +205,12 @@ the active axis bypasses the angle limit; the passive axes stay in STABILIZE —
 
 ---
 
-## 5. SROT vs ArduPilot/ArduSub — honest comparison
+## 5. Why SROT for autonomous missions and ROV work
 
-| | SROT | ArduPilot / ArduSub |
-|---|---|---|
-| Attitude | BNO085 **hardware fusion** | **EKF3** software fusion (IMU+baro+GPS+mag) |
-| Main loop | 500 Hz on a **dedicated core** | 400 Hz single-thread, time-sliced |
-| Comms vs flight | separate cores — comms never preempts flight | same thread, time-budgeted |
-| Attitude control | angle-P → rate-PID + FF | AC_AttitudeControl (sqrt + FF + input shaping) |
-| Motor output | DShot (RMT or Pico bidir + RPM loop) | PWM / DShot |
-| Position/nav | attitude + depth only | full position/velocity + waypoints |
+SROT is our preferred architecture for this vehicle: a ROS workspace owns perception
+and mission sequencing, the board owns fast attitude/depth control and primitive
+execution, and Bondor owns the operator workflow. The focused mode set and integrated
+RPM feedback serve those tasks directly.
 
-**SROT wins** on latency (no EKF step in the loop), zero scheduler jitter (isolated flight
-core), and digital ESC drive — a crisp low-jitter response for a small tethered sub.
-**ArduPilot wins** on EKF fusion robustness, advanced attitude control, position/mission
-capability, and field-hardened failsafes. Net: SROT trades fusion robustness + nav features
-for latency, core isolation, and simplicity.
+See [Hengla vs ArduSub](docs/VS_ARDUSUB.md) for the design rationale and current
+implementation boundaries, including the horizontal position-hold integration work.

@@ -48,7 +48,7 @@ static const float PRESS_MAX_MB = 40000.0f;    // ~300 m depth, past the Bar30's
 //
 // A PER-SAMPLE BAND IS STRUCTURALLY BLIND TO VARIANCE, and that blindness had teeth.
 //
-// duburi_ws measured this board on 2026-08-02 (BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md):
+// The ROS workspace measured this board on 2026-08-02 (BENCH_FINDINGS_FROM_ROS_WORKSPACE_2026-08-02.md):
 // a failing Bar30 produced 317..874 mbar and 6..30 C from sample to sample, on a stationary
 // bench. EVERY ONE of those readings sits inside the bands above -- they are deliberately
 // wide so a judgement call cannot ground the vehicle -- so SCALED_PRESSURE2 and WTEMP kept
@@ -67,7 +67,7 @@ static const float PRESS_MAX_MB = 40000.0f;    // ~300 m depth, past the Bar30's
 // thruster wash over the port and a real descent all produce real variance; this is aimed at
 // the 500+ mbar garbage that is unambiguously a broken sensor, not at tight sensor QA.
 //
-// The board is the right place for this even though duburi_ws added a host-side check too:
+// The board is the right place for this even though the ROS workspace added a host-side check too:
 // they can only refuse to ARM, the board can refuse AUTO.
 static const uint8_t JITTER_N          = 8;      // samples in the window (~0.4 s at 20 Hz)
 // DEFAULT only -- the live limit is the BARO_JIT_MAX parameter. It was compile-time, which

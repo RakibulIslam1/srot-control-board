@@ -334,7 +334,7 @@ static uint8_t dispatchCommand(uint16_t command, const float p[7]) {
                 //
                 // That is a command reporting success for work it never did -- the same class
                 // of fault as the stale DEPTH_OUT (rev 9) and the false CLAMP (rev 12), and
-                // the worst one yet, because duburi_ws sequences mission legs back-to-back on
+                // the worst one yet, because the ROS workspace sequences mission legs back-to-back on
                 // these completions and would advance through an entire mission on a dead hull.
                 //
                 // Refuse it the way MOTOR_DETECT already refuses (task_control_loop.cpp:382).

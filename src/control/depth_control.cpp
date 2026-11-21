@@ -17,7 +17,7 @@ static float s_last_err = 0, s_last_out = 0;
 // When update() last actually executed. Without this, s_last_err/s_last_out are a FROZEN
 // REGISTER whenever the controller is not running -- disarmed, or armed in a mode that does
 // not use the depth loop -- while still being published at full rate. A consumer cannot tell
-// "the loop settled at zero" from "the loop has never run", and duburi_ws gates arming on
+// "the loop settled at zero" from "the loop has never run", and the ROS workspace gates arming on
 // exactly that distinction (it refuses to arm while |DEPTH_OUT| >= 0.90). A stale value is
 // strictly worse than an absent one: absence fails their guard closed, staleness passes it
 // for the wrong reason. 0 = never run.

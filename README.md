@@ -6,18 +6,31 @@ MAVLink-native flight control on an **ESP32 DevKit V1** (dual-core FreeRTOS, 500
 loop, 8 vectored thrusters, BNO085 IMU + Bar30 depth), plus a **Raspberry Pi Pico 2 (RP2350)**
 co-processor driving the ESCs with bidirectional DShot for real per-thruster RPM.
 
-Hengla is **not** ArduSub and does not identify as it — the heartbeat reports
-`MAV_AUTOPILOT_GENERIC` on a submarine frame. What it adds over ArduSub is a companion-computer
-command set (`MAV_CMD_SROT_MOVE`) shaped like a ROS 2 action: the Jetson sends *intent*
-("forward 3 m", "yaw 90°", "hold 10 s") and the board owns attitude, depth, mixing, braking and
-failsafes. What it lacks is a state estimator, position control and replay logging — both sides
-of that trade are written up in **[docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md)**.
+Hengla is built for **autonomous AUV missions and piloted ROV operations on the same
+control platform**. The high-level compute runs ROS 2, perception and mission planning;
+Hengla owns the 500 Hz attitude and depth loops, thrust allocation, motion profiles,
+braking and failsafes. A companion sends a goal such as "forward for 3 s", "turn 90°"
+or "hold depth for 10 s", then receives progress and a terminal result.
+
+**SROT is our preferred solution for this AUV/ROV workflow:** a direct mission interface,
+per-thruster RPM feedback, a dedicated control core and Bondor operator tools in one suite.
+The focused mode set lets the operator select the behaviour the task needs; mission
+complexity lives in the ROS workspace. The design choices and current capability
+boundaries are explained in **[Hengla vs ArduSub](docs/VS_ARDUSUB.md)**.
+
+**Holding attitude, heading and depth is implemented. Horizontal position hold is an
+integration objective:** the current firmware has no horizontal position/velocity
+estimator or position controller. Timed translation and `HOLD` do not guarantee a fixed
+location in a current. See **[High-level Compute Integration](HIGH_LEVEL_COMPUTE_INTEGRATION.md)**.
 
 ![SROT and Hengla: the companion sends intent; the board owns attitude, depth, mixing and failsafes](docs/media/system.svg)
 
 ![Intent, not sticks: one MOVE goal in, one answer out](docs/media/intent.svg)
 
-Ground station is **Bondor**. BlueOS works for routing, MAVLink2Rest and video, but its
+The primary ground station is **Bondor**. The ROS workspace connects directly over
+**USB MAVLink 2 at 115200 baud**; a Raspberry Pi or BlueOS gateway is unnecessary.
+Hengla reports `MAV_AUTOPILOT_GENERIC` on a submarine frame. Optional BlueOS routing,
+MAVLink2Rest and video can be used, but its
 ArduPilot-gated setup pages stay empty by design — see **[docs/BLUEOS.md](docs/BLUEOS.md)**.
 
 ![Bondor, the ground station, on the Dive page: attitude, heading, depth, both batteries, leak, per-thruster RPM](docs/media/bondor-dive.jpg)
@@ -77,31 +90,51 @@ failsafe have no data and stay inert.
 > `pio run -t erase` **then** `pio run -t upload`, and re-import your parameters afterwards.
 > Full procedure and rationale: [PARAMETERS.md](PARAMETERS.md) and [AUDIT.md](AUDIT.md) R14.
 
+## Operating workflow
+
+Use `STABILIZE` for attitude-assisted piloting, `DEPTH_HOLD` for inspection at a captured
+depth, and `AUTO` for companion-commanded motion primitives. `MANUAL` and `ACRO` cover
+direct and rate control; `SURFACE` provides ascent and the failsafe destination.
+Direction detection, tuning and scripted manoeuvres have dedicated service modes.
+The full mode table and sensor requirements are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Documentation
+
 | Doc | What's in it |
 |---|---|
-| **[HARDWARE.md](HARDWARE.md)** | Complete pin map (every pin → what it connects to), wiring, buses, ESC/power |
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Dual-core design, the control loop, flight modes, tuning & calibration |
-| **[ALGORITHMS.md](ALGORITHMS.md)** | Every control algorithm in full — the math, step by step |
-| **[PARAMETERS.md](PARAMETERS.md)** | Every parameter, defaults, units, and the backup workflow |
-| **[JETSON_COMMS.md](JETSON_COMMS.md)** | The companion-computer contract — messages, rates, units, sign conventions |
-| **[DUBURI_WS_INTEGRATION.md](DUBURI_WS_INTEGRATION.md)** | Porting the duburi_ws ROS 2 stack onto this board |
-| **[VISION_API.md](VISION_API.md)** | ⭐ Vision-guided control spec — bearings in, 500 Hz loop on-board (**not yet implemented**) |
-| **[JETSON_FEEDBACK.md](JETSON_FEEDBACK.md)** | Findings sent to us *by* the companion team, ranked by what blocks them |
-| **[DOC_DRIFT_AND_DESIGN_REVIEW_2026-08-03.md](DOC_DRIFT_AND_DESIGN_REVIEW_2026-08-03.md)** | Design review from the new owner: doc-vs-code drift with file:line (ARCHITECTURE.md is the stalest and lists 7 modes where there are 11, omitting AUTO), the undocumented `thrust_trim` cascade stage, the `RPM_LOOP` contradiction, and the decisions worth preserving. **No behaviour changed** |
-| **[BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md](BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md)** | ⛔⛔ **READ FIRST — the water test is blocked.** The Bar30 is producing NOISE (317..874 mbar on a still bench) while the board reports it HEALTHY, which saturates the depth loop and **explains the arming vertical spin-up completely**. Measured on the vehicle, disarmed |
-| **[TASKS_FROM_DUBURI_WS.md](TASKS_FROM_DUBURI_WS.md)** | ⭐⭐ **START HERE — the run sheet.** Board-on-the-bench checks (§0: behaviour rev + the `GAIN 0.500` re-write), then the depth-gate wording fix, `FS_GCS_SYSID` (now unblocked — the companion moved to compid 191), and LEAK → `SYS_STATUS`. Ends with how to PR back |
-| **[DUBURI_WS_HANDOFF_2026-08-01.md](DUBURI_WS_HANDOFF_2026-08-01.md)** | The reasoning behind that run sheet: what the companion changed after merging our PR, the bench measurements they will send back, and the one finding we owe them — **the depth gate covers every AUTO move, not just dive verbs** |
-| **[AGENTS.md](AGENTS.md)** | Working rules for agents/devs + the invariants co-owned with the sibling repos |
-| **[AUDIT.md](AUDIT.md)** | Firmware audit: findings, evidence, and what was fixed |
-| **[docs/VS_ARDUSUB.md](docs/VS_ARDUSUB.md)** | Honest comparison — including where ArduSub is still ahead |
-| **[docs/BLUEOS.md](docs/BLUEOS.md)** | What works with BlueOS, what cannot, and how to configure it |
-| **[ROADMAP.md](ROADMAP.md)** | Phases, progress log, and the ranked upgrade list |
+| **[HARDWARE.md](HARDWARE.md)** | Pin map, wiring, buses, ESCs and power |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Dual-core design, control loop, all 11 modes and tuning |
+| **[ALGORITHMS.md](ALGORITHMS.md)** | Control algorithms and their implementation |
+| **[PARAMETERS.md](PARAMETERS.md)** | Parameters, defaults, units and backup |
+| **[High-level Compute Integration](HIGH_LEVEL_COMPUTE_INTEGRATION.md)** | Connect a ROS 2 workspace, adapt its flight-controller interface and run mission actions |
+| **[JETSON_COMMS.md](JETSON_COMMS.md)** | Companion wire contract: messages, rates, units, results and sign conventions |
+| **[Hengla vs ArduSub](docs/VS_ARDUSUB.md)** | Why SROT is the preferred architecture for this project's autonomous and ROV workflows |
+| **[VISION_API.md](VISION_API.md)** | Planned vision-guided control interface; not implemented on `main` |
+| **[docs/PID_TUNING.md](docs/PID_TUNING.md)** | Tuning procedure and lessons from water tests |
+| **[docs/BLUEOS.md](docs/BLUEOS.md)** | Optional BlueOS integration and UI compatibility |
+| **[AUDIT.md](AUDIT.md)** | Defect findings, fixes and deferred work |
+| **[ROADMAP.md](ROADMAP.md)** | Progress and remaining control/integration work |
+| **[AGENTS.md](AGENTS.md)** | Repository ownership, safety rules and shared protocol guarantees |
+
+The dated integration records remain available for traceability:
+
+| Record | Purpose |
+|---|---|
+| [ROS workspace feedback](JETSON_FEEDBACK.md) | Companion-side findings and follow-up |
+| [Firmware changelog for the ROS workspace](FIRMWARE_CHANGELOG_FOR_ROS_WORKSPACE.md) | Integration changes and their rationale |
+| [Design review, 2026-08-03](DOC_DRIFT_AND_DESIGN_REVIEW_2026-08-03.md) | Historical documentation and implementation findings |
+| [Bench findings, 2026-08-02](BENCH_FINDINGS_FROM_ROS_WORKSPACE_2026-08-02.md) | Measured depth-sensor fault evidence |
+| [ROS workspace tasks](TASKS_FROM_ROS_WORKSPACE.md) | Historical integration run sheet |
+| [ROS workspace handoff, 2026-08-01](ROS_WORKSPACE_HANDOFF_2026-08-01.md) | Companion changes and bench checks |
+| [Handoff to the ROS workspace, 2026-08-02](HANDOFF_TO_ROS_WORKSPACE_2026-08-02.md) | Hardware/development handoff |
+| [Control water-test checklist](WATER_TEST_CONTROL_ONLY.md) | Staged verification procedure |
 
 ## Status
-Core firmware complete and audit-hardened — see [AUDIT.md](AUDIT.md) for the nine defects found
-and fixed in the last pass. Precision control, the Pico RPM co-processor, autotune, LoRa
-telemetry and the companion command set are all shipped.
 
-**Not yet validated in water** (all default-off): `THR_TRIM_EN`, `MOT_BAT_V_MAX`, `MAG_YAW_REF`,
-`TRIM_EN`. Treat every wet test as a test — `ROADMAP.md` lists what to check.
+Attitude and depth control, AUTO primitives with braking, bidirectional-DShot RPM telemetry,
+autotune, LoRa telemetry and Bondor integration are implemented. On-board SD recording
+samples selected flight data at about 20 Hz; it is not a 500 Hz control-loop replay log.
+Ongoing findings and validation requirements are tracked in the audit and roadmap.
+
+**Default-off features awaiting water validation:** `THR_TRIM_EN`, `MOT_BAT_V_MAX`,
+`MAG_YAW_REF` and `TRIM_EN`. Validate the selected configuration on the actual vehicle.

@@ -1,16 +1,18 @@
 # Executable task list for the Hengla firmware agent — 2026-08-01
 
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
+
 **You have the board plugged into your dev box. This is the run sheet.**
 
-**From:** the `duburi_ws` (Mongla) companion side · branch `srot` @ `41318e7`, 631 tests green.
+**From:** the ROS workspace (ROS 2) companion side · branch `srot` @ `41318e7`, 631 tests green.
 **Against:** this repo @ `ced6dc9` · **Hengla v0.2.0** · `SROT_FW_BEHAVIOUR_REV 2`.
 
 Work top to bottom. **§0 is a five-minute read-only check and everything else depends on it.**
-When you are done, **open a PR into `duburi_ws` branch `srot`** — same as last time, it worked
+When you are done, **open a PR into the ROS workspace branch `srot`** — same as last time, it worked
 well.
 
 > Background, if you want the reasoning rather than the steps:
-> [`DUBURI_WS_HANDOFF_2026-08-01.md`](DUBURI_WS_HANDOFF_2026-08-01.md) (what we changed and why),
+> [`ROS_WORKSPACE_HANDOFF_2026-08-01.md`](ROS_WORKSPACE_HANDOFF_2026-08-01.md) (what we changed and why),
 > [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) Round 6 reply (our answers to your three questions).
 
 ---
@@ -88,13 +90,13 @@ Read as written, the current wording tells an operator *"skip the depth checks i
 driving forward"* — which is exactly the run where a sign error bites first, and in water a
 vertical runaway mid-leg is indistinguishable from a buoyancy problem.
 
-**Change, in `DUBURI_WS_INTEGRATION.md` §0a(1) and `ROADMAP.md`:**
+**Change, in `HIGH_LEVEL_COMPUTE_INTEGRATION.md` §0a(1) and `ROADMAP.md`:**
 - from *"gates every dive-dependent verb"* → **"gates every AUTO move, i.e. every `SROT_MOVE`
   primitive, `move_forward` included"**
 - add: **an in-air `move_forward` is NOT partial validation** — at ~0 m the latched target and
   the measurement agree, so the loop is never exercised.
 
-Already corrected on our side (`README.md`, `srot-integration.md`, `CLAUDE.md`).
+Already corrected on our side (`README.md`, `srot-integration.md`, the workspace's agent instructions).
 
 ---
 
@@ -158,7 +160,7 @@ temperature reading, which is what a leak actually is.
 | `_ack_budget_s` | demoted to a backstop after your R35 fix |
 | Behaviour-rev interlock | at **preflight** (`bringup_check --srot`) **and** in `arm()`; `0`/`1` fail closed, no-answer warns |
 | `SET_MESSAGE_INTERVAL` | consumed — `SROT_MESSAGE_RATES`, ATTITUDE ~11 → ~50 Hz |
-| `ESC_TELEMETRY_1_TO_4`/`_5_TO_8` | consumed — `/duburi/esc_rpm` publishes |
+| `ESC_TELEMETRY_1_TO_4`/`_5_TO_8` | consumed — `/auv/esc_rpm` publishes |
 | `move_back` | un-refused (`MOVE_BACK = 1`; ours was a missing branch) |
 | `MV_STATE` | corrected to **6 = HOLD, 7 = DONE** (we had `6 = done` too) |
 | `STUNT`/`PATTERN` | named in telemetry, excluded from `set_mode` (`DO_SET_MODE` cannot enter them) |
@@ -167,7 +169,7 @@ temperature reading, which is what a leak actually is.
 
 ---
 
-## §6 — When you PR back into `duburi_ws` branch `srot`
+## §6 — When you PR back into the ROS workspace branch `srot`
 
 - **Name any wire change explicitly in the commit message.** Expect
   `test_srot_protocol_drift.py` to fail until both sides land — that is the design, not a
@@ -187,7 +189,7 @@ on this list is either shipped or scoped so it does not block that.
 
 # §7 — Payload: make the BOARD enforce the role contract (added 2026-08-03)
 
-**Why this is on your list and not ours.** The agreed companion contract is: *duburi_ws
+**Why this is on your list and not ours.** The agreed companion contract is: *the ROS workspace
 activates a channel; the board fires it if it is high/low configured, and REJECTS it if it
 is PWM-configured for the on-board arm; either way the companion gets a success/failure
 acknowledgement.* We have implemented our half. **Your half does not exist yet**, and the
@@ -275,7 +277,7 @@ anyone to know a channel actually latched, or to notice one stuck ON.
 
 ---
 
-# §8 — MOTOR_DETECT fixed by duburi_ws (2026-08-06) — NEEDS FLASH + IN-WATER RUN
+# §8 — MOTOR_DETECT fixed by the ROS workspace (2026-08-06) — NEEDS FLASH + IN-WATER RUN
 
 **This one is ours, not a request.** The change is written, builds clean
 (`esp32doit-devkit-v1`, RAM 24.3 %, Flash 29.6 %) and is **not flashed** — the board is in
@@ -321,7 +323,7 @@ destroy a good calibration as its failure mode. It now leaves the stored value u
 and calls `finish(CalResult::FAIL)`, which also keeps `persist_pending` clear so a failed
 run cannot reach flash.
 
-`SROT_FW_BEHAVIOUR_REV` bumped **5 → 6**. Nothing for the companion to adapt to (duburi_ws
+`SROT_FW_BEHAVIOUR_REV` bumped **5 → 6**. Nothing for the companion to adapt to (the ROS workspace
 never runs MOTOR_DETECT), but it changes what an operator should expect from Bondor: a
 detect can now legitimately report FAIL, and that is the routine working correctly.
 

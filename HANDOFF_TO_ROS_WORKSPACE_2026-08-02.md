@@ -1,9 +1,11 @@
-# Handoff — SROT / Hengla development moves to the `duburi_ws` agent
+# Handoff — SROT / Hengla development moves to the ROS workspace agent
+
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
 
 **From:** the firmware side (`srot-control-board`, `srot-ground-station` + Bondor).
 **Baseline:** `srot-control-board` @ `4fcfd1c` · **`SROT_FW_BEHAVIOUR_REV 4`** ·
 `srot-ground-station` @ `7292d06`.
-**Setup from here on:** the SROT board lives on the **`duburi_ws` dev box**. You drive it.
+**Setup from here on:** the SROT board lives on the **the ROS workspace dev box**. You drive it.
 
 ---
 
@@ -12,7 +14,7 @@
 1. **`WATER_TEST_CONTROL_ONLY.md`** — the gate, the pre-dive checklist, the command sequence.
    This is the operational document.
 2. **`AUDIT.md`** R46–R56 — what changed this round and why.
-3. **`DUBURI_WS_INTEGRATION.md`** §0a — the depth gate, corrected wording.
+3. **`HIGH_LEVEL_COMPUTE_INTEGRATION.md`** §0a — the depth gate, corrected wording.
 
 ---
 
@@ -84,7 +86,7 @@ the disarmed preview, that difference is the diagnosis.
 
 ## How to reach us
 
-Same channel as before: this repo and `duburi_ws` branch `srot`. Open an issue or a PR here for
+Same channel as before: this repo and the ROS workspace branch `srot`. Open an issue or a PR here for
 anything firmware-side. **Name the behaviour you want, not the implementation** — that is what
 worked last round.
 

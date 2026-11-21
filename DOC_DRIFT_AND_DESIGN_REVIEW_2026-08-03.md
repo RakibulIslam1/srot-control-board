@@ -1,6 +1,6 @@
-# Design review + doc drift — from the `duburi_ws` side, 2026-08-03
+# Design review + doc drift — from the ROS workspace side, 2026-08-03
 
-**Context:** SROT/Hengla/Bondor development has moved to the `duburi_ws` agent, so this is
+**Context:** SROT/Hengla/Bondor development has moved to the ROS workspace agent, so this is
 written as a new owner reading the whole design set for the first time and checking it against
 the source. **No firmware behaviour is changed by this document.** It records what the code
 actually does where a doc says otherwise, and the design decisions worth preserving.
@@ -137,7 +137,7 @@ undone:
 recorded as a deliberate deferral, and it is the one deferral we would revisit first.
 
 **The barometer plausibility band is per-sample, and that is structurally blind to variance.**
-Covered fully in `BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md`: every reading in a 317..874
+Covered fully in `BENCH_FINDINGS_FROM_ROS_WORKSPACE_2026-08-02.md`: every reading in a 317..874
 mbar spread was individually inside the band, so the health bit stayed set while the derived
 depth wandered six metres. A jitter/peak-to-peak gate over N samples while stationary would
 catch it, and the board is the better place for it — **you can refuse `AUTO`; we can only

@@ -4,7 +4,7 @@
 
 # Round 6 (2026-08-01) — the contract the companion is built on
 
-Not our findings. The `duburi_ws` companion team read this firmware in full and wrote
+Not our findings. The the ROS workspace companion team read this firmware in full and wrote
 [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md), filtered to one question: *what does the companion
 hit that it cannot fix from its own side?* Six of their eleven items are real defects that five
 rounds of our own auditing missed — because we were auditing the vehicle in isolation and these
@@ -178,7 +178,7 @@ found it. Worth remembering the next time a review feels thorough.
 Found by the adversarial review of the companion-side PR, and it is the same class of mistake
 as R44: the artefact existed, but not where it had to be.
 
-R35–R44 introduced `SROT_FW_BEHAVIOUR_REV` precisely because grepping our C++ from `duburi_ws`
+R35–R44 introduced `SROT_FW_BEHAVIOUR_REV` precisely because grepping our C++ from the ROS workspace
 had already failed silently once. The replacement we proposed was a **pytest that reads
 `include/config.h` off disk** — and that test is `skipif`-guarded on the firmware repo being
 checked out beside the workspace. On the Jetson it is not, so the test **skips**. The guarantee
@@ -1104,7 +1104,7 @@ misled. Macros deleted, §0 rewritten to describe what the code really does.
   pin — which *is* wired — so the warning read as if unheeded.
 - `task_sensor_read.cpp`: "Decimation counters (200 Hz base)" — the base is 500 Hz. The
   arithmetic was right; only the comment was wrong.
-- `mav_stream.cpp`: referred to a **"Mongla"** move-action result — a project name from
+- `mav_stream.cpp`: referred to a **"companion"** move-action result — a project name from
   somewhere else entirely.
 - `config.h` / `main.cpp`: called the firmware an "ArduSub-clone".
 - `DEF_ST_RPM_MAX`'s comment justified 4500 as ">= THR_MAX_RPM" (4000) while the live

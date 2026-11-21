@@ -1,13 +1,15 @@
 # Handoff to the SROT / Hengla firmware agent — 2026-08-01
 
-**From:** the `duburi_ws` (Mongla) companion side.
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
+
+**From:** the ROS workspace (ROS 2) companion side.
 **Against:** `srot-control-board` @ `e2b43fe` · **Hengla v0.2.0** · `SROT_FW_BEHAVIOUR_REV 2`.
-**Our side:** `duburi_ws` branch `srot`, PR #2 merged, 630 tests green.
+**Our side:** the ROS workspace branch `srot`, PR #2 merged, 630 tests green.
 
 Your PR is merged. This is what changed on our side because of it, the **one firmware finding
 we owe you**, and what we need before the vehicle goes in water.
 
-> **Read [`FIRMWARE_CHANGELOG_FOR_DUBURI.md`](FIRMWARE_CHANGELOG_FOR_DUBURI.md) and the Round 6
+> **Read [`FIRMWARE_CHANGELOG_FOR_ROS_WORKSPACE.md`](FIRMWARE_CHANGELOG_FOR_ROS_WORKSPACE.md) and the Round 6
 > reply at the end of [`JETSON_FEEDBACK.md`](JETSON_FEEDBACK.md) first** — this document assumes
 > both. Nothing here changes a wire constant, so `test_srot_protocol_drift.py` stays green.
 
@@ -16,7 +18,7 @@ we owe you**, and what we need before the vehicle goes in water.
 ## 1. ⚠ The finding we owe you — your depth gate is scoped too narrowly
 
 Both of us have been writing that the two mandatory depth checks gate **dive-dependent verbs**:
-`DIVE`, `set_depth`, vision-depth, `surface`. `DUBURI_WS_INTEGRATION.md:295-301` says it, our
+`DIVE`, `set_depth`, vision-depth, `surface`. `HIGH_LEVEL_COMPUTE_INTEGRATION.md:295-301` says it, our
 `srot-integration.md` said it, and your changelog repeats it.
 
 **That is wrong, and it is wrong in the dangerous direction.** From your own source:
@@ -36,7 +38,7 @@ Read as written, "the gate covers dive-dependent verbs" tells an operator *"skip
 checks if you're only driving forward."* That is exactly the run where a sign error would first
 bite, and in the water a vertical runaway mid-leg is indistinguishable from a buoyancy problem.
 
-**Suggested fix on your side:** change the gate's wording in `DUBURI_WS_INTEGRATION.md` §0a(1)
+**Suggested fix on your side:** change the gate's wording in `HIGH_LEVEL_COMPUTE_INTEGRATION.md` §0a(1)
 and in `ROADMAP.md` from *"every dive-dependent verb"* to **"every AUTO move, i.e. every
 `SROT_MOVE` primitive"**, and state that an **in-air** `move_forward` is not partial validation
 — at ~0 m the latched target and the measurement agree, so the loop is never exercised. We have
@@ -72,7 +74,7 @@ default.
 
 ### Now consumed on our side
 - `SET_MESSAGE_INTERVAL` — rate pinning re-enabled (`SROT_MESSAGE_RATES`).
-- `ESC_TELEMETRY_1_TO_4`/`_5_TO_8` → `/duburi/esc_rpm` publishes.
+- `ESC_TELEMETRY_1_TO_4`/`_5_TO_8` → `/auv/esc_rpm` publishes.
 - `move_back` un-refused (`MOVE_BACK = 1` was always valid; ours was a missing branch).
 - `MV_STATE` corrected to **6 = HOLD, 7 = DONE** — we had `6 = done` too.
 - `STUNT` (100) / `PATTERN` (101) now named in telemetry, but excluded from our `set_mode`
@@ -141,6 +143,6 @@ print(m.recv_match(type='AUTOPILOT_VERSION', blocking=True).middleware_sw_versio
 same commit.** That is the whole mechanism — our source-text tripwire stayed green through your
 entire `MOVE_STOP` fix, and a number you bump deliberately is the thing that does not.
 
-**PR back into `duburi_ws` branch `srot`.** Same as last time; it worked well. Name any wire
+**PR back into the ROS workspace branch `srot`.** Same as last time; it worked well. Name any wire
 change explicitly in the commit message and expect our drift test to fail until both sides
 land — that is the design, not a problem.

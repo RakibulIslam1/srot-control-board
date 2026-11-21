@@ -523,7 +523,7 @@ void sendAutopilotVersion() {
     // field was 0 and free, and this is the ONLY place a companion can learn what this
     // firmware DOES rather than what version string it calls itself.
     //
-    // Why it has to be on the wire at all: duburi_ws removed its host-side MOVE_STOP brake
+    // Why it has to be on the wire at all: the ROS workspace removed its host-side MOVE_STOP brake
     // because rev 2 brakes on-board. Old firmware + new host = the hull COASTS on every
     // stop and abort, silently. Their check for that was a pytest that reads this repo's
     // headers off disk -- which skips on the Jetson, where the firmware source is not
@@ -704,7 +704,7 @@ int32_t getMessageInterval(uint32_t msgid) {
 
 // CONFIG BANNER — announce the stored config that changes how the vehicle MOVES.
 //
-// Asked for by duburi_ws (Round 8 §8.3/§8.4) after a real near-miss: FRAME_REVERSE lives in
+// Asked for by the ROS workspace (Round 8 §8.3/§8.4) after a real near-miss: FRAME_REVERSE lives in
 // NVS, so SROT_FW_BEHAVIOUR_REV cannot describe it. Five commits shipped inside one 6->7 bump
 // and their drift suite passed clean -- correctly, since it reads headers and no constant
 // moved -- while the meaning of every axis command on that hull had changed. A monotonic
@@ -857,7 +857,7 @@ void update(uint32_t now) {
         //
         // Without it there is no way to tell an ABSOLUTE heading from a relative one. If the
         // reference never locked, ATTITUDE.yaw is measured from the BNO's boot orientation and
-        // an absolute MOVE_TURN turns to a meaningless number, silently. duburi_ws needs this
+        // an absolute MOVE_TURN turns to a meaningless number, silently. The ROS workspace needs this
         // to gate absolute turns and fall back to relative on its own.
         //
         // MAGACC is NOT a proxy for it and must not be used as one (see yaw_ref.cpp:179-182):
@@ -921,7 +921,7 @@ void update(uint32_t now) {
             // frozen register whenever it was not: disarmed they held whatever they had when
             // the loop last executed, streamed at full rate, and looked completely live.
             //
-            // That is worse than saying nothing. duburi_ws refuses to arm while
+            // That is worse than saying nothing. The ROS workspace refuses to arm while
             // |DEPTH_OUT| >= 0.90, so a stale 0.00 passed that guard for the wrong reason --
             // "settled" and "never ran" were indistinguishable. Absence fails it closed.
             //

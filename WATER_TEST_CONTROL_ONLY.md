@@ -1,7 +1,9 @@
 # Water test — CONTROL ONLY. Reference and command sheet
 
+> **ROS examples:** Package names such as `ros_control`, topics under `/auv/`, the `auv` CLI and `VehicleState` are illustrative names. Map them to your installed ROS workspace. This documentation update does not rename external packages or change the SROT wire protocol.
+
 **Firmware:** `SROT_FW_BEHAVIOUR_REV 4` (`srot-control-board` @ `439a454`)
-**Companion:** `duburi_ws` branch `srot`, after PR #4
+**Companion:** the ROS workspace branch `srot`, after PR #4
 **Scope:** thrusters and depth only. **No vision, no payload actuation, no mission autonomy.**
 
 > This sheet is deliberately narrow. It is the first time this vehicle's depth loop closes in
@@ -22,7 +24,7 @@ sign, gain or authority has been exercised. A successful dry run is evidence of 
 
 ## 🛑 BLOCKER — CAUSE FOUND 2026-08-02, and a second blocker with it
 
-> **Read [`BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md`](BENCH_FINDINGS_FROM_DUBURI_WS_2026-08-02.md)
+> **Read [`BENCH_FINDINGS_FROM_ROS_WORKSPACE_2026-08-02.md`](BENCH_FINDINGS_FROM_ROS_WORKSPACE_2026-08-02.md)
 > before this section.** The companion side put the board on a bench, read it disarmed, and
 > the arming spin-up is explained:
 >
@@ -121,7 +123,7 @@ Run this first — it shows the whole board in one screen (two batteries, depth-
 internals, per-ESC RPM/temp, mag accuracy, leak, kill, firmware health):
 
 ```bash
-ros2 run duburi_manager connect            # snapshot;  --watch for live
+ros2 run ros_manager connect            # snapshot;  --watch for live
 ```
 
 | # | Check | Expected |
@@ -147,31 +149,31 @@ the barometer is unhealthy. If they are absent, depth is not trustworthy — do 
 
 ## Command sheet — control only
 
-Run from `duburi_ws`. Tethered, shallow, **hand on the kill switch**, one leg at a time.
+Run from the ROS workspace. Tethered, shallow, **hand on the kill switch**, one leg at a time.
 
 ```bash
-ros2 launch duburi_manager bringup.launch.py            # expect: rev 4, srot backend
-ros2 run duburi_planner duburi arm
-ros2 run duburi_planner duburi set_mode --target_name DEPTH_HOLD
+ros2 launch ros_manager bringup.launch.py            # expect: rev 4, srot backend
+ros2 run ros_planner auv arm
+ros2 run ros_planner auv set_mode --target_name DEPTH_HOLD
 ```
 
 **Order matters — each step gates the next. Stop at the first surprise.**
 
 | # | Command | Watch for |
 |---|---|---|
-| 1 | `duburi set_depth --target -0.3` | descends, settles, **holds** without oscillating |
+| 1 | `auv set_depth --target -0.3` | descends, settles, **holds** without oscillating |
 | 2 | *(hand-push it 0.2 m off depth)* | returns to the setpoint, does not run away |
-| 3 | `duburi move_forward --duration 2 --gain 40` | moves, **stops on its own**, holds depth throughout |
-| 4 | `duburi stop` | **decelerates** — does not coast (rev ≥ 2 brakes on-board) |
-| 5 | `duburi yaw_left --target 90` | turns ~90°, holds depth |
-| 6 | `duburi turn --target 0` | goes to **absolute** north, not 90° from wherever it started |
-| 7 | `duburi surface` | ascends, disarms at the surface |
+| 3 | `auv move_forward --duration 2 --gain 40` | moves, **stops on its own**, holds depth throughout |
+| 4 | `auv stop` | **decelerates** — does not coast (rev ≥ 2 brakes on-board) |
+| 5 | `auv yaw_left --target 90` | turns ~90°, holds depth |
+| 6 | `auv turn --target 0` | goes to **absolute** north, not 90° from wherever it started |
+| 7 | `auv surface` | ascends, disarms at the surface |
 
 **Step 6 is new in rev 4** and is the one to watch: absolute `turn` never worked before, because it
 requires `MAG_YAW_REF=1` which shipped off. If it turns to a heading relative to where it booted,
 the alignment did not lock — check for `LOCKED` in the log.
 
-**Abort at any point:** `duburi stop`, then kill switch. `stop` now brakes on-board; if the hull
+**Abort at any point:** `auv stop`, then kill switch. `stop` now brakes on-board; if the hull
 coasts, the board is running firmware older than rev 2 and **must not be flown**.
 
 ---
