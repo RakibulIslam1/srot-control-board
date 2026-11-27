@@ -345,6 +345,49 @@ not the code to transliterate.
 Let `e_yaw = vis_bearing` (rad), `e_lat = vis_bearing`, `e_dep = vis_elev`,
 `s = vis_size`, `s*` = commanded size, and let `A ∈ [0,1]` be a freshness authority (§5.5).
 
+### 5.0 ⛔ The standoff term has a validity bound, and past it the hull CLOSES IN
+
+`vis_size = sqrt(size_x * size_y)` is the right feature and we are not asking you
+to change it. It is Corke & Hutchinson's `sqrt(area)` Z-axis feature (IEEE T-RA
+**17(4), Aug 2001, p.512**), and their three reasons are worth having in front of
+you while you pick `Kp_fwd`:
+
+1. it is a **scalar**;
+2. it is **rotation invariant**, which decouples camera roll from the Z axis;
+3. it "**has the dimension of length, giving this feature the units of pixels and
+   thus a similar magnitude control gain**" as the bearing features — i.e. the
+   sqrt is what makes `Kp_fwd` the same order as `Kp_lat`. Without it the feature
+   goes as 1/Z² and the loop gain silently squares across an approach.
+
+**The same paragraph states the limit**, and this is the part we want in the spec
+before anyone implements §5.1:
+
+> "work best when the target normal is within **±35°** of the camera's optical
+> axis. When the target plane is not orthogonal to the optical axis its area
+> will appear **diminished**, due to perspective, which causes the camera to
+> **initially approach the target**."
+
+An oblique target reads as *further away*, so a one-sided `fwd_cmd` drives
+**closer** — past the commanded standoff, into whatever the standoff existed to
+keep us off. On a flat prop seen at 45° the under-read is order tens of percent,
+and it is worst exactly when a mission is squaring up to something.
+
+**You do not need to fix this, and you cannot.** `LANDING_TARGET` carries a
+bearing and a size; obliquity needs the target's 6-DoF **pose**, which lives on
+the companion (`lock_node`, IPPE + SQPnP, flip-aware). So the division is:
+
+| | owns |
+|---|---|
+| **companion** | the obliquity gate — we stop commanding a standoff while the face is too far off-normal |
+| **board** | the loop, exactly as §5.1 already specifies |
+
+Concretely: while the target is too oblique we send **`p2 = 0` (no forward
+axis)** and keep sending the bearing, so you hold station and steer but do not
+close. Nothing new is required on your side; §5.1 stays as written.
+
+We have implemented our half already (`standoff_max_tilt_deg`, off by default),
+so this section is a note for whoever writes §5.1 rather than a request.
+
 ### 5.1 The base terms
 
 ```
