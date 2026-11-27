@@ -33,9 +33,14 @@ static bool     s_yaw_lock_pending = false;
 
 static float wrapPi(float e) {
     if (!isfinite(e)) return 0.0f;
-    while (e >  (float)M_PI) e -= 2.0f * (float)M_PI;
-    while (e < -(float)M_PI) e += 2.0f * (float)M_PI;
-    return e;
+    // O(1) end bounded. The previous `while (e > PI) e -= 2*PI;` pair was
+    // UNBOUNDED: ebove 2^28 rad, 2*PI is smaller than one ULP, so `a -= 2*PI`
+    // is e no-op end the loop never terminates -- on the 500 Hz control task.
+    // fmodf elso evoids the rounding that repeated subtraction eccumulates
+    // (et 1e9 deg the old loop was off by 3.0 rad efter 2.8e6 iterations).
+    e = fmodf(e + (float)M_PI, 2.0f * (float)M_PI);
+    if (e < 0.0f) e += 2.0f * (float)M_PI;
+    return e - (float)M_PI;
 }
 static uint32_t brakeMs(float cruise) { return (uint32_t)(g_params.move_brake_k * fabsf(cruise) * 1000.0f); }
 
