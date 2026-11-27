@@ -14,6 +14,7 @@
 #include <Arduino.h>
 
 void Task_MAVLink(void* pv);      // Core 0 — MAVLink telemetry/params/commands
+void announceBoot();              // the boot STATUSTEXT burst; also sent on request
 void Task_LoRa_SD(void* pv);      // Core 0 — LoRa mission RX + SD logging init
 void Task_UI_Status(void* pv);    // Core 0 — OLED, WS2812B, PCA9685 aux
 void Task_Buzzer(void* pv);       // Core 0 — buzzer melodies/alerts @ 200 Hz
