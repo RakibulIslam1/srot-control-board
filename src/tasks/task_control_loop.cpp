@@ -147,8 +147,12 @@ static void readInputs(LoopIn& in) {
     }
 }
 
-// Mode → body-axis demands (−1..1). Surge/sway (fwd/lat) are always pilot
-// passthrough; roll/pitch/yaw/heave depend on the mode's controller.
+// Mode → body-axis demands (−1..1). Surge/sway (fwd/lat) are computed as pilot
+// passthrough below and then OVERWRITTEN by two modes — AUTO takes them from the
+// movement primitive, SURFACE zeroes them — so "always pilot passthrough" is true
+// of every mode except those two. Stated precisely because a companion streaming
+// MANUAL_CONTROL into either one gets no error, just no motion.
+// Roll/pitch/yaw/heave depend on the mode's controller.
 // STUNT/PATTERN are handled by their own state machines in P6; until then they
 // fall through to STABILIZE behaviour.
 static void computeDemands(const LoopIn& in, float dt,
@@ -942,7 +946,47 @@ void Task_ControlLoop(void* pv) {
                 g_state.control.mv_active   = now_active;
                 g_state.control.mv_state    = movement::phase();
                 g_state.control.mv_progress = movement::progress();
-                if (mv_was_active && !now_active) g_state.control.mv_done_seq = prev_mv_seq;  // completed
+                if (mv_was_active && !now_active) {
+                    g_state.control.mv_done_seq = prev_mv_seq;  // completed
+
+                    // LEAVE AUTO WHEN THE MOVEMENT ENDS — the same thing STUNT, PATTERN
+                    // and AUTOTUNE already do when their state machines finish (:865,
+                    // :874, :855). AUTO was the only self-terminating mode that stayed
+                    // latched after its work was done, and the consequence is not cosmetic:
+                    // computeDemands()'s AUTO branch OVERWRITES every pilot axis
+                    //     fwd = md.fwd; lat = md.lat;          (:243)
+                    //     thr = depth::update(...)             (:241, sp_throttle ignored)
+                    //     attitude::stabilize(0, 0, md.yaw)    (:239, sp_yaw ignored)
+                    // and a finished movement is PH_IDLE, which returns a default-
+                    // constructed Demand (fwd=lat=yaw=0). So every MANUAL_CONTROL frame the
+                    // companion sent after a move was DISCARDED, with no NAK, no STATUSTEXT
+                    // and no log line — the companion streams setpoints and the vehicle
+                    // simply does not move. That is the failure mode of the whole
+                    // offload split: the Jetson computes, this board actuates.
+                    //
+                    // DEPTH_HOLD, not STABILIZE, because post-move AUTO is already holding
+                    // depth and heading; dropping to STABILIZE would silently DISCARD the
+                    // depth hold the vehicle currently has. DEPTH_HOLD keeps it, passes
+                    // surge/sway/yaw through, and turns heave into a climb-rate command.
+                    // There is no lurch: the mode-change handler runs depth::reset(in.depth)
+                    // (:427), which re-latches the target to the depth we are already at.
+                    //
+                    // Without a trustworthy baro DEPTH_HOLD is not honest (rev 3 refuses it
+                    // over the wire for exactly that reason), and this internal transition
+                    // does not pass through that gate — so fall back to STABILIZE rather
+                    // than entering a depth mode the board cannot stand behind.
+                    if (in.mode == FlightMode::AUTO) {
+                        g_state.control.mode = in.depth_ok ? FlightMode::DEPTH_HOLD
+                                                           : FlightMode::STABILIZE;
+                        // NOT sendHeartbeatNow() here, deliberately. It reaches mav::tx()
+                        // and writes UART0 directly — the same thing mav_stream.h forbids
+                        // sendStatusText() from doing off Core 0 — so calling it from this
+                        // 500 Hz Core-1 loop would block real-time code on the tx mutex.
+                        // The next scheduled HEARTBEAT carries the new mode; being up to
+                        // one heartbeat period late is a far smaller cost than stalling
+                        // the control loop.
+                    }
+                }
             }
             // Only advance the edge tracker when the write landed. On a lock miss the state
             // was not published, so clearing mv_was_active here would drop the completion.
